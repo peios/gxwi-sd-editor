@@ -1,0 +1,126 @@
+/* Made from the theme's tokens, which the desktop's page for a live surface
+   brings with it. The dialog is as big as .editor, which says so (fx-fit):
+   as wide as it is set to be here, and as tall as what is in it. */
+html, body { height: 100%; }
+
+body {
+    margin: 0;
+    background: var(--surface-1);
+    color: var(--text-primary);
+    font: 500 13px/1.4 var(--font-text);
+    color-scheme: light dark;
+    overflow: auto;
+}
+
+#fx-root[data-connected="false"] { opacity: 0.5; }
+
+.editor {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    width: 30rem;
+    max-width: 100vw;
+    box-sizing: border-box;
+    padding: var(--space-4);
+}
+
+header h1 { margin: 0; font-size: 16px; font-weight: 700; overflow-wrap: anywhere; }
+header p { margin: 2px 0 0; color: var(--text-muted); font-size: 12px; }
+h2 { margin: 0 0 var(--space-2); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+
+button {
+    height: var(--control-sm);
+    padding: 0 var(--space-3);
+    font: inherit;
+    font-weight: 600;
+    color: var(--text-primary);
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+button:hover:not(:disabled) { background: var(--surface-3, var(--surface-2)); border-color: var(--text-muted); }
+button:disabled { color: var(--text-muted); cursor: default; opacity: 0.6; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-solid); outline-offset: 1px; }
+button.primary { color: var(--accent-contrast, #fff); background: var(--accent-solid); border-color: var(--accent-solid); }
+
+.owner { display: flex; align-items: center; gap: var(--space-2); }
+.owner span { color: var(--text-muted); }
+.owner strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Everyone the access list names. */
+.listed {
+    margin: 0;
+    padding: var(--space-1);
+    list-style: none;
+    max-height: 9.5rem;
+    overflow: auto;
+    background: var(--bg-sunken);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+}
+.listed button.who {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    width: 100%;
+    height: auto;
+    padding: var(--space-1) var(--space-2);
+    text-align: left;
+    background: none;
+    border: 1px solid transparent;
+}
+.listed button.who:hover { background: var(--surface-2); }
+.listed button.who[aria-selected="true"] { background: var(--surface-2); border-color: var(--accent-solid); }
+.listed .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.listed small { flex: none; color: var(--text-muted); font-weight: 500; font-family: var(--font-mono); font-size: 11px; }
+.under { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
+
+/* A name being typed, for someone to add or to own it. */
+.naming { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+.naming input {
+    flex: 1;
+    min-width: 10rem;
+    height: var(--control-sm);
+    padding: 0 var(--space-2);
+    font: inherit;
+    color: inherit;
+    background: var(--bg-sunken);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+}
+.naming input[aria-invalid="true"] { border-color: var(--danger-text); }
+.wrong { flex-basis: 100%; margin: 0; color: var(--danger-text); font-size: 12px; }
+
+/* What the one picked can do: a row a right, and a box allowing it and
+   one denying it. */
+.rights { width: 100%; border-collapse: collapse; }
+.rights caption { margin-bottom: var(--space-2); text-align: left; font-weight: 700; overflow-wrap: anywhere; }
+.rights th, .rights td { padding: 3px var(--space-2); border-bottom: 1px solid var(--border-subtle, var(--border-default)); }
+.rights th { text-align: left; font-weight: 600; }
+.rights thead th { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+.rights thead th:not(:first-child), .rights td { width: 4.5rem; text-align: center; }
+
+.rights [role="checkbox"] {
+    display: inline-grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    vertical-align: middle;
+    background: var(--bg-sunken);
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    opacity: 1;
+}
+.rights [role="checkbox"][aria-checked="true"] { background: var(--accent-solid); border-color: var(--accent-solid); }
+.rights [role="checkbox"][aria-checked="true"]::after { content: "✓"; color: var(--accent-contrast, #fff); font-size: 12px; font-weight: 800; line-height: 1; }
+/* What is inherited, or more than the boxes say: ticked, greyed, and not
+   for changing here. */
+.rights .inherited[aria-checked="true"], .rights .special[aria-checked="true"] { background: var(--text-muted); border-color: var(--text-muted); cursor: default; }
+
+.note, .none { margin: 0; color: var(--text-muted); font-size: 12px; }
+.trouble { margin: 0; padding: var(--space-2) var(--space-3); color: var(--danger-text); border: 1px solid var(--danger-text); border-radius: var(--radius-sm); overflow-wrap: anywhere; }
+
+footer { display: flex; align-items: center; gap: var(--space-2); }
+footer .status { flex: 1; color: var(--text-muted); }

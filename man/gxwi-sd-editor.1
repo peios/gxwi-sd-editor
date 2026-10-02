@@ -1,0 +1,31 @@
+.TH GXWI-SD-EDITOR 1 "2026-10-02" "Peios"
+.SH NAME
+gxwi-sd-editor \- edit a security descriptor in a dialog on a GXWI desktop
+.SH SYNOPSIS
+.B gxwi-sd-editor
+.SH DESCRIPTION
+Opened by another program, which wants the security descriptor of something
+of its own edited: a file, a registry key, a service. That program starts it
+as a child, on the desktop it is on, and the two speak over the editor's
+standard input and output, one JSON object a line. The program's first line
+says what the object is called, what kind of thing it is, what its rights are
+called, and what its descriptor is. The editor shows it in a dialog of its
+own. When the person presses Apply or OK, the editor writes the whole
+descriptor back, with the parts of it that changed, and the program applies
+it and answers whether it could. The editor changes nothing itself.
+.PP
+The dialog shows the owner, and everyone the access list names. For whoever
+is picked it has a box for each general right the program named, allowed and
+denied. Inherited entries are shown greyed, and anything the boxes cannot say
+is shown as Special and kept as it is. Add puts a user or group in the list
+by name, Remove takes away what was set here for whoever is picked, and
+Change sets the owner, where the program can change it.
+.PP
+The editor ends when the dialog is closed or cancelled, and after OK once the
+program has applied what it sent. It ends as well when its standard input
+closes, and when the program that started it does.
+.PP
+Started by hand, with no request on its standard input, it says so and ends.
+.SH SEE ALSO
+The protocol is set out in the Peios userspace protocols (PSPU), on
+learn.peios.org.

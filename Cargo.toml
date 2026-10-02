@@ -1,0 +1,32 @@
+[package]
+name = "gxwi-sd-editor"
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# The library is what a program that opens the editor needs: the protocol and
+# a way to start it. It has nothing of GXWI's in it, so a program depending
+# on it with `default-features = false` gets nothing of the editor's.
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "gxwi-sd-editor"
+path = "src/main.rs"
+required-features = ["program"]
+
+[features]
+default = ["program"]
+program = ["dep:libgxwi", "dep:peios", "dep:libauthd", "dep:libc"]
+
+[dependencies]
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The dialog role is not in a released libgxwi yet: until it is, the one
+# beside this checkout.
+libgxwi = { path = "../gxwi/libgxwi", optional = true }
+peios = { git = "https://github.com/peios/peios-rs.git", rev = "3dffee949a457509078ffc2f423613de330b5401", package = "peios", optional = true }
+libauthd = { git = "https://github.com/peios/authd.git", rev = "3aec2905a4e0bcbe7a4fd07682fb328847d6fc18", package = "libauthd", optional = true }
+libc = { version = "0.2", optional = true }

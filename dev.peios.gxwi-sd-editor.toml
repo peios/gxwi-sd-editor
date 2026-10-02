@@ -1,0 +1,8 @@
+# What the editor is to a desktop (PGSS Applications): installed as
+# /usr/share/apps/dev.peios.gxwi-sd-editor.toml, named for the id, by the
+# package that installs the program. It is opened by another program, about
+# something of that program's, so a launcher does not list it.
+title = "Permissions"
+description = "Change who can use something, and how"
+program = "/usr/bin/gxwi-sd-editor"
+listed = false

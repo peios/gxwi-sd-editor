@@ -1,0 +1,284 @@
+//! gxwi-sd-editor: a security descriptor editor for GXWI desktops, and what a
+//! program needs in order to open it.
+//!
+//! The editor is a program of its own, which a program that wants a
+//! descriptor edited starts as a child of its own. The two speak over the
+//! child's standard input and output, one JSON object a line. The editor
+//! draws a dialog on the desktop the program is on, which it finds as any app
+//! does, and edits a copy. The program does everything else: it reads the
+//! descriptor, says what the object is called and what its rights are
+//! called, and applies what comes back. It holds the object and the right to
+//! change it, and the editor holds neither, so the editor serves files,
+//! registry keys and services alike.
+//!
+//!   program → editor   the first line: a [`Request`]
+//!   editor → program   { "type": "apply", "sd", "parts" }   on Apply or OK
+//!   program → editor   { "type": "applied" }
+//!                   or { "type": "failed", "why" }
+//!
+//! `sd` is a self-relative security descriptor's bytes, in base64, whichever
+//! way it goes. What the editor sends is the whole of what it shows, and
+//! `parts` are the parts of it that changed, which are the ones to apply:
+//! the rest is as it was read. A descriptor is sent whole and only when the
+//! person says so, never as they change it: one applied half way through can
+//! take away the access needed to finish. A failure is shown in the dialog,
+//! which stays open to be put right.
+//!
+//! The editor ends when the person closes it, and after OK once what it sent
+//! has been applied, and its output closing is how the program knows. It
+//! ends when its input closes as well, so it goes when the program does,
+//! however the program ends.
+//!
+//! [`edit`] starts it and speaks for the program. This library has nothing of
+//! GXWI's in it: with `default-features = false` it is the protocol alone.
+
+use std::io::{self, BufRead, BufReader, Write};
+use std::path::Path;
+use std::process::{Command, Stdio};
+
+use serde::{Deserialize, Serialize};
+
+/// Where the editor is installed.
+pub const PROGRAM: &str = "/usr/bin/gxwi-sd-editor";
+
+/// What the program tells the editor, as the first line of its input.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Request {
+    pub object: Object,
+    /// The descriptor as it is now: the owner, the group and the access list,
+    /// and the rest if the program could read it.
+    #[serde(with = "base64_bytes")]
+    pub sd: Vec<u8>,
+    /// What the object's rights are called. The `general` ones are what the
+    /// person is shown and ticks, from the most to the least: "Full
+    /// control", "Read". A mask that is more than they can say is shown as
+    /// special.
+    pub rights: Vec<Right>,
+    /// What the generic rights are of this kind of object, for an entry
+    /// that grants them.
+    pub generic: Generic,
+    /// What the program can change.
+    #[serde(default)]
+    pub can: Can,
+}
+
+/// The object whose descriptor it is.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Object {
+    /// What it is called where the person found it: `notes.txt`.
+    pub name: String,
+    /// What kind of thing it is, for the person: "File", "Folder", "Service".
+    pub kind: String,
+    /// Whether things inside it inherit from it, as a folder's do. What is
+    /// ticked for it then applies to it and everything in it.
+    #[serde(default)]
+    pub container: bool,
+}
+
+/// A right of the object's, by what it is called.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Right {
+    pub name: String,
+    pub mask: u32,
+    #[serde(default)]
+    pub general: bool,
+}
+
+/// The rights the generic ones stand for, on this kind of object.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Generic {
+    pub read: u32,
+    pub write: u32,
+    pub execute: u32,
+    pub all: u32,
+}
+
+/// Which parts of the descriptor the program can change. The access list it
+/// always can, or there would be nothing to edit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Can {
+    #[serde(default)]
+    pub owner: bool,
+    #[serde(default)]
+    pub audit: bool,
+}
+
+/// A part of a descriptor, as the program applies it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Part {
+    Owner,
+    Group,
+    Dacl,
+    Sacl,
+}
+
+/// What the editor tells the program.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum FromEditor {
+    Apply {
+        #[serde(with = "base64_bytes")]
+        sd: Vec<u8>,
+        parts: Vec<Part>,
+    },
+}
+
+/// What the program answers an `apply` with.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToEditor {
+    Applied,
+    /// Why it could not be applied, for the person to read.
+    Failed { why: String },
+}
+
+/// One line of the protocol: `message` as JSON, and the newline.
+pub fn line(message: &impl Serialize) -> String {
+    let mut line = serde_json::to_string(message).expect("the protocol's messages are all JSON");
+    line.push('\n');
+    line
+}
+
+/// Opens the editor at [`PROGRAM`] on `request`, which is [`edit_with`].
+pub fn edit(
+    request: &Request,
+    apply: impl FnMut(&[u8], &[Part]) -> Result<(), String> + Send + 'static,
+    done: impl FnOnce() + Send + 'static,
+) -> io::Result<()> {
+    edit_with(Path::new(PROGRAM), request, apply, done)
+}
+
+/// Starts `program` as the editor on `request`, and speaks for the caller on
+/// a thread of its own: `apply` is given each descriptor the person applies
+/// and the parts of it that changed, and what it returns is the editor's
+/// answer, an `Err` saying why it could not be. `done` is called once, when
+/// the editor has gone, however it went. The editor is the caller's child,
+/// and goes when the caller does.
+pub fn edit_with(
+    program: &Path,
+    request: &Request,
+    mut apply: impl FnMut(&[u8], &[Part]) -> Result<(), String> + Send + 'static,
+    done: impl FnOnce() + Send + 'static,
+) -> io::Result<()> {
+    let mut child = Command::new(program).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
+    let (Some(mut input), Some(output)) = (child.stdin.take(), child.stdout.take()) else {
+        return Err(io::Error::other("the editor was started without its input and output"));
+    };
+    if let Err(e) = input.write_all(line(request).as_bytes()).and_then(|()| input.flush()) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(e);
+    }
+    std::thread::spawn(move || {
+        for said in BufReader::new(output).lines() {
+            let Ok(said) = said else { break };
+            // A line this does not know is not answered: a newer editor may
+            // say more than this knows of.
+            let Ok(FromEditor::Apply { sd, parts }) = serde_json::from_str(&said) else { continue };
+            let answer = match apply(&sd, &parts) {
+                Ok(()) => ToEditor::Applied,
+                Err(why) => ToEditor::Failed { why },
+            };
+            if input.write_all(line(&answer).as_bytes()).and_then(|()| input.flush()).is_err() {
+                break;
+            }
+        }
+        drop(input);
+        let _ = child.wait();
+        done();
+    });
+    Ok(())
+}
+
+/// Bytes as base64 text, which is how a descriptor crosses in JSON.
+mod base64_bytes {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], to: S) -> Result<S::Ok, S::Error> {
+        to.serialize_str(&STANDARD.encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(from: D) -> Result<Vec<u8>, D::Error> {
+        STANDARD.decode(String::deserialize(from)?).map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request() -> Request {
+        Request {
+            object: Object { name: "notes.txt".into(), kind: "File".into(), container: false },
+            sd: vec![1, 0, 4, 128],
+            rights: vec![Right { name: "Read".into(), mask: 0x0012_0089, general: true }],
+            generic: Generic { read: 1, write: 2, execute: 4, all: 8 },
+            can: Can { owner: true, audit: false },
+        }
+    }
+
+    #[test]
+    fn a_request_crosses_as_one_line_and_comes_back_the_same() {
+        let said = line(&request());
+        assert!(said.ends_with('\n') && said.matches('\n').count() == 1);
+        assert!(said.contains("\"sd\":\"AQAEgA==\""));
+        assert_eq!(serde_json::from_str::<Request>(&said).unwrap(), request());
+        // What a program leaves out is what it cannot do.
+        let bare = r#"{"object":{"name":"k","kind":"Key"},"sd":"","rights":[],"generic":{"read":0,"write":0,"execute":0,"all":0}}"#;
+        let bare: Request = serde_json::from_str(bare).unwrap();
+        assert_eq!((bare.object.container, bare.can), (false, Can::default()));
+    }
+
+    #[test]
+    fn the_answers_are_as_the_protocol_says() {
+        let apply = FromEditor::Apply { sd: vec![0xff], parts: vec![Part::Owner, Part::Dacl] };
+        assert_eq!(line(&apply), "{\"type\":\"apply\",\"sd\":\"/w==\",\"parts\":[\"owner\",\"dacl\"]}\n");
+        assert_eq!(line(&ToEditor::Applied), "{\"type\":\"applied\"}\n");
+        assert_eq!(line(&ToEditor::Failed { why: "no".into() }), "{\"type\":\"failed\",\"why\":\"no\"}\n");
+        assert!(serde_json::from_str::<FromEditor>(r#"{"type":"apply","sd":"not base64!","parts":[]}"#).is_err());
+    }
+
+    #[test]
+    fn edit_speaks_for_the_program_until_the_editor_goes() {
+        // An editor that applies twice, says what it was answered, and goes.
+        let dir = std::env::temp_dir().join(format!("gxwi-sd-editor-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let editor = dir.join("editor.sh");
+        let heard = dir.join("heard");
+        std::fs::write(
+            &editor,
+            format!(
+                "#!/bin/sh\nread request\necho \"$request\" > {heard}\n\
+                 echo '{{\"type\":\"apply\",\"sd\":\"AQI=\",\"parts\":[\"dacl\"]}}'\nread answer\necho \"$answer\" >> {heard}\n\
+                 echo 'a line it does not know'\n\
+                 echo '{{\"type\":\"apply\",\"sd\":\"AQI=\",\"parts\":[\"owner\"]}}'\nread answer\necho \"$answer\" >> {heard}\n",
+                heard = heard.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&editor, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let (tell, gone) = std::sync::mpsc::channel();
+        let applied = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = applied.clone();
+        edit_with(
+            &editor,
+            &request(),
+            move |sd, parts| {
+                seen.lock().unwrap().push((sd.to_vec(), parts.to_vec()));
+                if parts == [Part::Owner] { Err("you are not allowed to".into()) } else { Ok(()) }
+            },
+            move || tell.send(()).unwrap(),
+        )
+        .unwrap();
+        gone.recv_timeout(std::time::Duration::from_secs(10)).expect("done when the editor has gone");
+        assert_eq!(*applied.lock().unwrap(), [(vec![1, 2], vec![Part::Dacl]), (vec![1, 2], vec![Part::Owner])]);
+        let heard = std::fs::read_to_string(&heard).unwrap();
+        let heard: Vec<&str> = heard.lines().collect();
+        assert_eq!(serde_json::from_str::<Request>(heard[0]).unwrap(), request());
+        assert_eq!(&heard[1..], ["{\"type\":\"applied\"}", "{\"type\":\"failed\",\"why\":\"you are not allowed to\"}"]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
