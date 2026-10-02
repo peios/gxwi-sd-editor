@@ -21,6 +21,11 @@ is shown as Special and kept as it is. Add puts a user or group in the list
 by name, Remove takes away what was set here for whoever is picked, and
 Change sets the owner, where the program can change it.
 .PP
+What the program cannot change is shown and not offered: where it cannot
+change the access list, the boxes cannot be ticked, there is no Add or
+Remove, and the dialog says why; where it can change nothing, Close is the
+only button.
+.PP
 The editor ends when the dialog is closed or cancelled, and after OK once the
 program has applied what it sent. It ends as well when its standard input
 closes, and when the program that started it does.

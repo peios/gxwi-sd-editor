@@ -73,6 +73,27 @@ pub struct Object {
     /// ticked for it then applies to it and everything in it.
     #[serde(default)]
     pub container: bool,
+    /// What a container holds, which is what what is ticked for it is
+    /// passed on to.
+    #[serde(default, skip_serializing_if = "Children::is_all")]
+    pub children: Children,
+}
+
+/// What a container holds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Children {
+    /// Containers and other objects, as a folder holds folders and files.
+    #[default]
+    All,
+    /// Containers alone, as a registry key holds keys and nothing else.
+    Containers,
+}
+
+impl Children {
+    fn is_all(&self) -> bool {
+        *self == Children::All
+    }
 }
 
 /// A right of the object's, by what it is called.
@@ -93,14 +114,32 @@ pub struct Generic {
     pub all: u32,
 }
 
-/// Which parts of the descriptor the program can change. The access list it
-/// always can, or there would be nothing to edit.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// Which parts of the descriptor the program can change. What it cannot is
+/// shown all the same, and not offered to be changed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Can {
+    /// The access list. Left out, it can: a program could always change
+    /// that, before it could say it could not.
+    #[serde(default = "yes")]
+    pub dacl: bool,
     #[serde(default)]
     pub owner: bool,
     #[serde(default)]
     pub audit: bool,
+    /// Why it cannot change what it cannot, for the person to read: "You
+    /// may not change this service's definition."
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+}
+
+impl Default for Can {
+    fn default() -> Can {
+        Can { dacl: true, owner: false, audit: false, why: None }
+    }
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// A part of a descriptor, as the program applies it.
@@ -212,11 +251,11 @@ mod tests {
 
     fn request() -> Request {
         Request {
-            object: Object { name: "notes.txt".into(), kind: "File".into(), container: false },
+            object: Object { name: "notes.txt".into(), kind: "File".into(), container: false, children: Children::All },
             sd: vec![1, 0, 4, 128],
             rights: vec![Right { name: "Read".into(), mask: 0x0012_0089, general: true }],
             generic: Generic { read: 1, write: 2, execute: 4, all: 8 },
-            can: Can { owner: true, audit: false },
+            can: Can { owner: true, ..Can::default() },
         }
     }
 
@@ -226,10 +265,20 @@ mod tests {
         assert!(said.ends_with('\n') && said.matches('\n').count() == 1);
         assert!(said.contains("\"sd\":\"AQAEgA==\""));
         assert_eq!(serde_json::from_str::<Request>(&said).unwrap(), request());
-        // What a program leaves out is what it cannot do.
+        // A program that leaves `can` out can change the access list and
+        // nothing else, as before it could say otherwise.
         let bare = r#"{"object":{"name":"k","kind":"Key"},"sd":"","rights":[],"generic":{"read":0,"write":0,"execute":0,"all":0}}"#;
         let bare: Request = serde_json::from_str(bare).unwrap();
-        assert_eq!((bare.object.container, bare.can), (false, Can::default()));
+        assert_eq!((bare.object.container, &bare.can), (false, &Can { dacl: true, owner: false, audit: false, why: None }));
+        assert!(!said.contains("children"), "a container of everything is the default, and goes unsaid");
+        let key: Object = serde_json::from_str(r#"{"name":"sshd","kind":"Registry key","container":true,"children":"containers"}"#).unwrap();
+        assert_eq!(key.children, Children::Containers);
+        let older: Request = serde_json::from_str(&said.replace("\"can\":{", "\"can\":{\"x\":1,").replace("\"dacl\":true,", "")).unwrap();
+        assert!(older.can.dacl && older.can.owner);
+        // One that may only look says so, and why.
+        let looking = Can { dacl: false, why: Some("You may not change it.".into()), ..Can::default() };
+        assert_eq!(line(&looking), "{\"dacl\":false,\"owner\":false,\"audit\":false,\"why\":\"You may not change it.\"}\n");
+        assert!(!line(&Can::default()).contains("why"));
     }
 
     #[test]

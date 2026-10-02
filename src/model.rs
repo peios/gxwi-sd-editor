@@ -9,11 +9,14 @@
 //! The boxes stand for SIMPLE entries: allowing or denying, made here and
 //! not inherited, and applying to the object itself, and, on a container,
 //! to everything in it as well, which is what a folder's entries usually
-//! are. An entry that is anything else, or one granting more than the
-//! general rights can say between them, is shown as special and left alone.
-//! What is inherited is shown greyed, and is the container's to change.
+//! are. What a container passes its entries on to is what it holds: a
+//! folder's go to the folders and files in it, a registry key's to the keys
+//! under it alone. An entry that is anything else, or one granting more than
+//! the general rights can say between them, is shown as special and left
+//! alone. What is inherited is shown greyed, and is the container's to
+//! change.
 
-use gxwi_sd_editor::{Generic, Part, Right};
+use gxwi_sd_editor::{Children, Generic, Part, Right};
 use peios::security::{AccessMask, Ace, AceFlags, AceType, AclBuilder, Control, SdBuilder, SdView, Sid};
 
 /// An entry of the access list, owned, so it can be changed and written back
@@ -175,13 +178,18 @@ pub struct Rules {
     pub general: Vec<Right>,
     pub generic: Generic,
     pub container: bool,
+    pub children: Children,
 }
 
 impl Rules {
     /// The flags of an entry the boxes stand for: on a container, it applies
     /// to the container and everything in it.
     fn flags(&self) -> AceFlags {
-        if self.container { AceFlags::OBJECT_INHERIT | AceFlags::CONTAINER_INHERIT } else { AceFlags::empty() }
+        match (self.container, self.children) {
+            (false, _) => AceFlags::empty(),
+            (true, Children::All) => AceFlags::OBJECT_INHERIT | AceFlags::CONTAINER_INHERIT,
+            (true, Children::Containers) => AceFlags::CONTAINER_INHERIT,
+        }
     }
 
     /// Whether the boxes stand for `entry`.
@@ -326,6 +334,7 @@ mod tests {
             general: vec![right("Full control", ALL), right("Read & execute", READ | EXECUTE), right("Read", READ), right("Write", WRITE)],
             generic: Generic { read: READ, write: WRITE, execute: EXECUTE, all: ALL },
             container,
+            children: Children::All,
         }
     }
 
@@ -431,6 +440,22 @@ mod tests {
         let mut open = Descriptor { dacl: None, ..d.clone() };
         assert!(rules.tick(&mut open, &everyone, 2, Way::Allow, true));
         assert_eq!(open.dacl.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_container_of_containers_passes_its_entries_on_to_them_alone() {
+        // A registry key: its entries are container-inherit, and nothing else.
+        let rules = Rules { children: Children::Containers, ..rules(true) };
+        let everyone = sid("S-1-1-0");
+        let key = |mask| Entry::simple(AceType::AccessAllowed, AceFlags::CONTAINER_INHERIT, mask, sid("S-1-1-0"));
+        let mut d = descriptor(vec![key(READ)]);
+        assert_eq!(rules.shown(&d, &everyone).special, (false, false));
+        assert_eq!(rules.shown(&d, &everyone).rights[2], (Tick::Yes, Tick::No));
+        assert!(rules.tick(&mut d, &everyone, 3, Way::Allow, true));
+        assert_eq!(d.dacl.as_ref().unwrap(), &vec![key(READ | WRITE)]);
+        // A folder's shape on a key is more than the boxes say.
+        let folderish = descriptor(vec![Entry::simple(AceType::AccessAllowed, AceFlags::OBJECT_INHERIT | AceFlags::CONTAINER_INHERIT, READ, everyone)]);
+        assert_eq!(rules.shown(&folderish, &everyone).special, (true, false));
     }
 
     #[test]

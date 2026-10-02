@@ -115,11 +115,13 @@ button.primary { color: var(--accent-contrast, #fff); background: var(--accent-s
 }
 .rights [role="checkbox"][aria-checked="true"] { background: var(--accent-solid); border-color: var(--accent-solid); }
 .rights [role="checkbox"][aria-checked="true"]::after { content: "✓"; color: var(--accent-contrast, #fff); font-size: 12px; font-weight: 800; line-height: 1; }
-/* What is inherited, or more than the boxes say: ticked, greyed, and not
-   for changing here. */
-.rights .inherited[aria-checked="true"], .rights .special[aria-checked="true"] { background: var(--text-muted); border-color: var(--text-muted); cursor: default; }
+/* What is inherited, more than the boxes say, or not the program's to
+   change: ticked, greyed, and not for changing here. */
+.rights [role="checkbox"]:disabled[aria-checked="true"], .rights .special[aria-checked="true"] { background: var(--text-muted); border-color: var(--text-muted); cursor: default; }
+.rights [role="checkbox"]:disabled { cursor: default; }
 
 .note, .none { margin: 0; color: var(--text-muted); font-size: 12px; }
+.note.fixed { color: var(--text-secondary); }
 .trouble { margin: 0; padding: var(--space-2) var(--space-3); color: var(--danger-text); border: 1px solid var(--danger-text); border-radius: var(--radius-sm); overflow-wrap: anywhere; }
 
 footer { display: flex; align-items: center; gap: var(--space-2); }

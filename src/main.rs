@@ -80,7 +80,7 @@ impl Editor {
         let general = request.rights.into_iter().filter(|right| right.general).collect();
         Ok(Editor {
             object: request.object.clone(),
-            rules: Rules { general, generic: request.generic, container: request.object.container },
+            rules: Rules { general, generic: request.generic, container: request.object.container, children: request.object.children },
             can: request.can,
             picked: listed.first().copied(),
             listed,
@@ -162,15 +162,22 @@ impl Editor {
         )
     }
 
+    /// Whether the program can change anything at all.
+    fn changeable(&self) -> bool {
+        self.can.dacl || self.can.owner
+    }
+
     fn boxes(&self) -> String {
         let Some(sid) = self.picked else {
-            return "<p class=\"none\">Nobody is picked. Pick someone above, or add someone.</p>".into();
+            let add = if self.can.dacl { ", or add someone" } else { "" };
+            return format!("<p class=\"none\">Nobody is picked. Pick someone above{add}.</p>");
         };
         let shown = self.rules.shown(&self.descriptor, &sid);
+        let fixed = if self.can.dacl { "" } else { " disabled" };
         let tick = |tick: Tick, which: usize, way: &str, name: &str| {
             let (checked, disabled, class) = match tick {
-                Tick::No => ("false", "", ""),
-                Tick::Yes => ("true", "", ""),
+                Tick::No => ("false", fixed, ""),
+                Tick::Yes => ("true", fixed, ""),
                 Tick::Inherited => ("true", " disabled", " class=\"inherited\""),
             };
             format!(
@@ -197,7 +204,7 @@ impl Editor {
             String::new()
         };
         let greyed = if shown.rights.iter().any(|(allowed, denied)| *allowed == Tick::Inherited || *denied == Tick::Inherited) {
-            "<p class=\"note\">Greyed ticks are inherited from the folder this is in, and are changed there.</p>"
+            "<p class=\"note\">Greyed ticks are inherited from what this is in, and are changed there.</p>"
         } else {
             ""
         };
@@ -245,15 +252,46 @@ impl Live for Editor {
         let owning = if self.asking == Some(Asking::Owner) { self.field(Asking::Owner) } else { String::new() };
         let listed: String = self.listed.iter().map(|sid| self.row(sid)).collect();
         let empty = match &self.descriptor.dacl {
-            None => "<p class=\"note\">There is no access list, so anyone can do anything with this. Ticking a box makes one.</p>",
+            None if self.can.dacl => "<p class=\"note\">There is no access list, so anyone can do anything with this. Ticking a box makes one.</p>",
+            None => "<p class=\"note\">There is no access list, so anyone can do anything with this.</p>",
             Some(entries) if entries.is_empty() && self.listed.is_empty() => "<p class=\"note\">The access list is empty, so nobody but its owner can change who can use this.</p>",
             _ => "",
         };
         let adding = if self.asking == Some(Asking::Add) { self.field(Asking::Add) } else { String::new() };
         let removable = self.picked.is_some_and(|sid| self.descriptor.dacl.iter().flatten().any(|entry| entry.sid == sid && !entry.inherited()) || !self.descriptor.principals().contains(&sid));
+        // Who is in the list, and what they may do, is changed only by a
+        // program that can change the list: otherwise it is there to read,
+        // and why it cannot be changed is said once, above it.
+        let under = if self.can.dacl {
+            format!(
+                "<div class=\"under\"><button type=\"button\" fx-click=\"add\"{adding_now}>Add…</button>\
+                 <button type=\"button\" fx-click=\"remove\"{unremovable}>Remove</button></div>",
+                adding_now = if self.asking == Some(Asking::Add) { " disabled" } else { "" },
+                unremovable = if removable { "" } else { " disabled" },
+            )
+        } else {
+            String::new()
+        };
+        let fixed = if self.can.dacl {
+            String::new()
+        } else {
+            let why = self.can.why.as_deref().unwrap_or("The program that opened this cannot change who may do what with it.");
+            format!("<p class=\"note fixed\">{}</p>", escape(why))
+        };
         let trouble = self.trouble.as_ref().map(|why| format!("<p class=\"trouble\" role=\"alert\">{}</p>", escape(why))).unwrap_or_default();
         let status = if busy { "<span class=\"status\" role=\"status\">Applying…</span>" } else { "<span class=\"status\" role=\"status\"></span>" };
         let unchanged = self.changed == (false, false);
+        let footer = if self.changeable() {
+            format!(
+                "<button type=\"button\" class=\"primary\" fx-click=\"ok\"{busy_attr}>OK</button>\
+                 <button type=\"button\" fx-click=\"cancel\">Cancel</button>\
+                 <button type=\"button\" fx-click=\"apply\"{apply_off}>Apply</button>",
+                busy_attr = if busy { " disabled" } else { "" },
+                apply_off = if busy || unchanged { " disabled" } else { "" },
+            )
+        } else {
+            "<button type=\"button\" class=\"primary\" fx-click=\"cancel\">Close</button>".into()
+        };
         // The keys for answering what is asked, while something is.
         let keys = if self.asking.is_some() {
             "<button type=\"button\" fx-key=\"Escape\" fx-click=\"keep\"></button>"
@@ -265,24 +303,15 @@ impl Live for Editor {
              <div class=\"editor\" fx-fit>\
              <header><h1>{name}</h1><p>{kind}</p></header>\
              <section class=\"owner\"><span>Owner</span><strong>{owner}</strong>{change}</section>{owning}\
-             <section class=\"people\"><h2 id=\"people\">Users and groups</h2>\
-             <ul class=\"listed\" role=\"listbox\" aria-labelledby=\"people\">{listed}</ul>{empty}{adding}\
-             <div class=\"under\"><button type=\"button\" fx-click=\"add\"{adding_now}>Add…</button>\
-             <button type=\"button\" fx-click=\"remove\"{unremovable}>Remove</button></div></section>\
+             {fixed}<section class=\"people\"><h2 id=\"people\">Users and groups</h2>\
+             <ul class=\"listed\" role=\"listbox\" aria-labelledby=\"people\">{listed}</ul>{empty}{adding}{under}</section>\
              <section class=\"boxes\">{boxes}</section>\
              {trouble}\
-             <footer>{status}\
-             <button type=\"button\" class=\"primary\" fx-click=\"ok\"{busy_attr}>OK</button>\
-             <button type=\"button\" fx-click=\"cancel\">Cancel</button>\
-             <button type=\"button\" fx-click=\"apply\"{apply_off}>Apply</button></footer>\
+             <footer>{status}{footer}</footer>\
              </div>",
             name = escape(&self.object.name),
             kind = escape(&self.object.kind),
-            adding_now = if self.asking == Some(Asking::Add) { " disabled" } else { "" },
-            unremovable = if removable { "" } else { " disabled" },
             boxes = self.boxes(),
-            busy_attr = if busy { " disabled" } else { "" },
-            apply_off = if busy || unchanged { " disabled" } else { "" },
         )
     }
 
@@ -290,15 +319,17 @@ impl Live for Editor {
         if !matches!(name, "pick") {
             self.trouble = None;
         }
-        // While the program has the descriptor, it is as it was sent.
+        // While the program has the descriptor, it is as it was sent; and
+        // what the program cannot change, the person cannot either.
         let busy = self.sending != Sending::No;
+        let listing = self.can.dacl && !busy;
         match name {
             "pick" => {
                 if let Some(sid) = value["sid"].as_str().and_then(|sid| sid.parse::<Sid>().ok()).filter(|sid| self.listed.contains(sid)) {
                     self.picked = Some(sid);
                 }
             }
-            "tick" if !busy => {
+            "tick" if listing => {
                 let (Some(sid), Some(which)) = (self.picked, value["right"].as_str().and_then(|which| which.parse::<usize>().ok())) else { return };
                 let way = if value["way"].as_str() == Some("deny") { Way::Deny } else { Way::Allow };
                 let shown = self.rules.shown(&self.descriptor, &sid);
@@ -308,7 +339,7 @@ impl Live for Editor {
                     self.changed.1 = true;
                 }
             }
-            "add" => {
+            "add" if self.can.dacl => {
                 fields.set("who", "");
                 self.wrong = None;
                 self.asking = Some(Asking::Add);
@@ -344,7 +375,7 @@ impl Live for Editor {
                 self.asking = None;
                 self.wrong = None;
             }
-            "remove" if !busy => {
+            "remove" if listing => {
                 let Some(sid) = self.picked else { return };
                 if self.rules.remove(&mut self.descriptor, &sid) {
                     self.changed.1 = true;
@@ -418,4 +449,66 @@ fn main() {
 fn die(why: &str) -> ! {
     eprintln!("gxwi-sd-editor: {why}");
     std::process::exit(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gxwi_sd_editor::{Generic, Right};
+
+    /// The editor open on a service's descriptor, as a program that can do
+    /// what `can` says asked for it.
+    fn editor(can: Can) -> Editor {
+        let sd = peios::security::sddl::parse("O:SYG:BAD:(A;;0xf;;;SY)(A;;0x1;;;AU)").unwrap();
+        let right = |name: &str, mask| Right { name: name.into(), mask, general: true };
+        let request = Request {
+            object: Object { name: "Time client".into(), kind: "Service".into(), container: false, children: Default::default() },
+            sd: sd.as_bytes().to_vec(),
+            rights: vec![right("Full control", 0xf), right("See its state", 0x1)],
+            generic: Generic { read: 0x1, write: 0xe, execute: 0xe, all: 0xf },
+            can,
+        };
+        Editor::new(request, Names::offline()).unwrap()
+    }
+
+    fn shown(editor: &Editor) -> String {
+        editor.render(&Facts { views: 1, fields: &Fields::default() })
+    }
+
+    fn event(editor: &mut Editor, name: &str, value: serde_json::Value) {
+        editor.event(name, &value, &mut Fields::default());
+    }
+
+    #[test]
+    fn what_the_program_cannot_change_is_shown_and_not_offered() {
+        let mut editor = editor(Can { dacl: false, why: Some("You may not change it here.".into()), ..Can::default() });
+        let html = shown(&editor);
+        assert!(html.contains("<p class=\"note fixed\">You may not change it here.</p>"));
+        assert!(html.contains("aria-checked=\"true\" disabled"), "Local System's Full control shows, unpressable");
+        assert!(!html.contains("Add…") && !html.contains(">Apply<") && !html.contains(">OK<"));
+        assert!(html.contains("fx-click=\"cancel\">Close</button>"));
+        // A tick that comes anyway changes nothing.
+        event(&mut editor, "tick", serde_json::json!({ "right": "1", "way": "deny" }));
+        event(&mut editor, "remove", serde_json::json!({}));
+        assert_eq!(editor.changed, (false, false));
+        // Whoever is listed can still be looked at.
+        event(&mut editor, "pick", serde_json::json!({ "sid": "S-1-5-11" }));
+        assert!(shown(&editor).contains("What Authenticated Users can do"));
+    }
+
+    #[test]
+    fn a_program_that_can_change_the_list_is_offered_it_whole() {
+        let mut editor = editor(Can::default());
+        let html = shown(&editor);
+        assert!(!html.contains("note fixed") && html.contains("Add…") && html.contains(">Apply<"));
+        assert!(!html.contains("Change…"), "the owner is not offered: the program did not say it could change it");
+        event(&mut editor, "pick", serde_json::json!({ "sid": "S-1-5-11" }));
+        event(&mut editor, "tick", serde_json::json!({ "right": "0", "way": "allow" }));
+        assert_eq!(editor.changed, (false, true));
+        // Without the list, with only the owner, the boxes are fixed and OK is still there.
+        let editor = self::editor(Can { dacl: false, owner: true, ..Can::default() });
+        let html = shown(&editor);
+        assert!(html.contains("Change…") && html.contains(">OK<") && !html.contains("Add…"));
+        assert!(html.contains("cannot change who may do what with it"));
+    }
 }
