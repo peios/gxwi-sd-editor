@@ -40,6 +40,8 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "names")]
 pub mod names;
+#[cfg(feature = "registry")]
+pub mod registry;
 
 /// `edited`'s `parts`, and the rest of `current`: what applying only the
 /// parts the person changed comes to, where a program keeps a descriptor
