@@ -22,6 +22,9 @@ program = ["names", "dep:libgxwi", "dep:libc"]
 # Who a SID is, as the editor says it, for a program that shows who a
 # descriptor grants before the editor is opened.
 names = ["dep:peios", "dep:libauthd"]
+# What applying the parts of a descriptor the person changed comes to,
+# for a program that keeps a descriptor whole, as a registry value.
+splice = ["dep:peios"]
 
 [dependencies]
 base64 = "0.22"
