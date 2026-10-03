@@ -33,6 +33,6 @@ serde_json = "1"
 # The dialog role is not in a released libgxwi yet: until it is, the one
 # beside this checkout.
 libgxwi = { path = "../gxwi/libgxwi", optional = true }
-peios = { git = "https://github.com/peios/peios-rs.git", rev = "a32489b50fe6119551219155b2daba426421e7ae", package = "peios", optional = true }
-libauthd = { git = "https://github.com/peios/authd.git", rev = "ec9e4771ad3b6783afa3032664260f8d3bb1be7b", package = "libauthd", optional = true }
+peios = { git = "https://github.com/peios/peios-rs.git", rev = "3cf23f68d40c4adff252e28241bb3c958fba824f", package = "peios", optional = true }
+libauthd = { git = "https://github.com/peios/authd.git", rev = "ecd0cdd8fb1b0c82376750ab1a248dc82534a03e", package = "libauthd", optional = true }
 libc = { version = "0.2", optional = true }
