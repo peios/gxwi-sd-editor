@@ -54,11 +54,20 @@ const ALSO: &[(&str, &str)] = &[
     ("NetworkService", "S-1-5-20"),
 ];
 
+/// One question to the authority, and its answer.
+type Ask = fn(Key) -> io::Result<Option<(Sid, String)>>;
+
 /// The names known so far, so that a render never waits on the authority.
 pub struct Names {
     known: HashMap<Sid, String>,
     /// Whom to ask about the rest. `None` asks nobody, for tests.
-    ask: Option<fn(Key) -> io::Result<Option<(Sid, String)>>>,
+    ask: Option<Ask>,
+}
+
+impl Default for Names {
+    fn default() -> Names {
+        Names::new()
+    }
 }
 
 impl Names {
@@ -66,7 +75,8 @@ impl Names {
         Names { known: HashMap::new(), ask: Some(ask) }
     }
 
-    #[cfg(test)]
+    /// Names that ask nobody: the well-known ones, and SIDs for the rest.
+    /// For tests, and wherever the authority is not to be waited on.
     pub fn offline() -> Names {
         Names { known: HashMap::new(), ask: None }
     }
@@ -115,11 +125,11 @@ impl Names {
             return Ok(sid);
         }
         // A SID as it is written, or as SDDL abbreviates it.
-        if typed.starts_with("S-") || (typed.len() == 2 && typed.chars().all(|c| c.is_ascii_uppercase())) {
-            if let Ok(sid) = typed.parse::<Sid>() {
-                self.learn(&sid);
-                return Ok(sid);
-            }
+        if (typed.starts_with("S-") || (typed.len() == 2 && typed.chars().all(|c| c.is_ascii_uppercase())))
+            && let Ok(sid) = typed.parse::<Sid>()
+        {
+            self.learn(&sid);
+            return Ok(sid);
         }
         let Some(ask) = self.ask else { return Err(format!("There is nobody called {typed}.")) };
         match ask(Key::Name(typed.into())) {

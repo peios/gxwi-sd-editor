@@ -14,15 +14,14 @@
 use std::io::{BufRead, Write};
 use std::sync::Arc;
 
+use gxwi_sd_editor::names::Names;
 use gxwi_sd_editor::{Can, FromEditor, Object, Request, ToEditor, line};
 use libgxwi::{App, Closer, Facts, Fields, Live, Value, escape};
 use peios::security::Sid;
 
 mod model;
-mod names;
 
 use model::{Descriptor, Rules, Tick, Way};
-use names::Names;
 
 // What this program looks like on its dialog's strip. The icon itself is
 // `gxwi-sd-editor.svg`, installed as the base theme's.

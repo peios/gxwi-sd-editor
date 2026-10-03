@@ -38,6 +38,9 @@ use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "names")]
+pub mod names;
+
 /// Where the editor is installed.
 pub const PROGRAM: &str = "/usr/bin/gxwi-sd-editor";
 

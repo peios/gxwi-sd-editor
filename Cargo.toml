@@ -18,7 +18,10 @@ required-features = ["program"]
 
 [features]
 default = ["program"]
-program = ["dep:libgxwi", "dep:peios", "dep:libauthd", "dep:libc"]
+program = ["names", "dep:libgxwi", "dep:libc"]
+# Who a SID is, as the editor says it, for a program that shows who a
+# descriptor grants before the editor is opened.
+names = ["dep:peios", "dep:libauthd"]
 
 [dependencies]
 base64 = "0.22"
