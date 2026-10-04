@@ -21,7 +21,7 @@ default = ["program"]
 program = ["names", "dep:libgxwi", "dep:libc"]
 # Who a SID is, as the editor says it, for a program that shows who a
 # descriptor grants before the editor is opened.
-names = ["dep:peios", "dep:libauthd"]
+names = ["dep:peios", "dep:libauthd", "dep:libauthd-client"]
 # What applying the parts of a descriptor the person changed comes to,
 # for a program that keeps a descriptor whole, as a registry value.
 splice = ["dep:peios"]
@@ -37,5 +37,8 @@ serde_json = "1"
 # beside this checkout.
 libgxwi = { path = "../gxwi/libgxwi", optional = true }
 peios = { git = "https://github.com/peios/peios-rs.git", rev = "3cf23f68d40c4adff252e28241bb3c958fba824f", package = "peios", optional = true }
-libauthd = { git = "https://github.com/peios/authd.git", rev = "ecd0cdd8fb1b0c82376750ab1a248dc82534a03e", package = "libauthd", optional = true }
+# Who a SID is, asked of authd's identity socket through the client every
+# program asking it shares.
+libauthd = { git = "https://github.com/peios/authd.git", rev = "bef250488952820015683f3020d15c7f4adbe0d4", package = "libauthd", optional = true }
+libauthd-client = { git = "https://github.com/peios/authd.git", rev = "bef250488952820015683f3020d15c7f4adbe0d4", package = "libauthd-client", optional = true }
 libc = { version = "0.2", optional = true }

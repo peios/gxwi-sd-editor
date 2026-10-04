@@ -3,16 +3,16 @@
 //! The well-known principals by the names the documentation gives them, as
 //! `ls -l` shows them (peiosutils' sid_render), and everyone else by asking
 //! the authority, authd, on its identity socket, which is the only thing
-//! that can say. A connection a question, as peiosutils does it: authd
-//! closes one left idle, and the editor may be open for an hour.
+//! that can say. A connection a question, through libauthd-client, as
+//! peiosutils does it: authd closes one left idle, and the editor may be
+//! open for an hour.
 
 use std::collections::HashMap;
 use std::io;
-use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
-use libauthd::ident::{self, Fields, Key, Kind, Outcome};
-use libauthd::transport::{recv_message, send_message};
+use libauthd::ident::{Fields, Key, Kind};
+use libauthd_client::ident::Ident;
 use peios::security::{Sid, SidRef};
 
 /// How long the authority is given to answer.
@@ -146,24 +146,11 @@ impl Names {
 /// One question to the authority. `Ok(None)` is its word that there is no
 /// such principal.
 fn ask(key: Key) -> io::Result<Option<(Sid, String)>> {
-    let stream = UnixStream::connect(libauthd::IDENT_SOCKET_PATH)?;
-    stream.set_read_timeout(Some(TIMEOUT))?;
-    stream.set_write_timeout(Some(TIMEOUT))?;
     // The name and the SID are always answered: no more is asked, so that
     // nothing is withheld that was not needed.
-    let request = ident::encode_lookup(&ident::Lookup { tag: 1, key, kind: Kind::Any, fields: Fields::empty() })
-        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
-    send_message(&stream, &request)?;
-    let received = recv_message(&libauthd::wire::FRAMING, &stream)?;
-    let reply = ident::decode_lookup_reply(received.expose()).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
-    match (reply.outcome, reply.record) {
-        (Outcome::Found, Some(record)) => {
-            let sid = SidRef::from_bytes(&record.sid).map(SidRef::to_sid).ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
-            Ok(Some((sid, record.qualified_name)))
-        }
-        (Outcome::NotFound, _) => Ok(None),
-        _ => Err(io::Error::other("the authority could not answer")),
-    }
+    let Some(record) = Ident::new().with_timeout(TIMEOUT).lookup(key, Kind::Any, Fields::empty())? else { return Ok(None) };
+    let sid = SidRef::from_bytes(&record.sid).map(SidRef::to_sid).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "authd answered with a SID that isn't one"))?;
+    Ok(Some((sid, record.qualified_name)))
 }
 
 #[cfg(test)]
