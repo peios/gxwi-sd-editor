@@ -358,7 +358,8 @@ impl Simple {
         let part = obj.parts.first()?.guid;
         let id = ids.next();
         let flags = if obj.container { obj.home() } else { 0 };
-        self.parts.push(PartRule { ids: vec![id], sid, parts: vec![part], allow: 0x10, deny: 0, cond: None, flags, kind: None, deny_at: usize::MAX, allow_at: usize::MAX });
+        let read = obj.part_rights().first().map_or(0x10, |(_, m)| *m);
+        self.parts.push(PartRule { ids: vec![id], sid, parts: vec![part], allow: read, deny: 0, cond: None, flags, kind: None, deny_at: usize::MAX, allow_at: usize::MAX });
         Some(id)
     }
 

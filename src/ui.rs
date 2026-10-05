@@ -1092,8 +1092,22 @@ impl Editor {
             opts.extend(left.iter().map(|x| (guid_text(&x.guid), format!("{}{}{}", if x.set.is_some() { "  " } else { "" }, x.name, if x.kind == PartKind::Right { " (action)" } else { "" }), false)));
             self.select(&format!("{p}.{key}.add"), &opts, "", " class=\"addpart\" aria-label=\"Add a part\"")
         };
+        // A part not listed, by its name, where the program says how.
+        let named = match &self.obj.naming {
+            Some(n) if !fixed => {
+                let field = format!("{p}.{key}.named");
+                let such = n.example.as_ref().map(|x| format!(", such as {x}")).unwrap_or_default();
+                format!(
+                    "<span class=\"named\">{}<button type=\"button\" class=\"small\" fx-click=\"{p}-named\" fx-value-r=\"{key}\">Add {}</button></span>{}",
+                    self.text_field(&field, "", &format!(" class=\"addpart\" placeholder=\"Another {}{}\" aria-label=\"Another {} by name\"", h(&n.noun), h(&such), h(&n.noun))),
+                    h(&title_case(&n.noun)),
+                    self.wrong.get(&field).map(|w| format!("<span class=\"wrong\">{}</span>", h(w))).unwrap_or_default()
+                )
+            }
+            _ => String::new(),
+        };
         let covered: Vec<String> = parts.iter().filter_map(|g| self.obj.part(g)).filter(|d| d.kind == PartKind::Set).flat_map(|d| self.obj.parts.iter().filter(move |x| x.set == Some(d.guid)).map(|x| x.name.clone())).collect();
-        format!("<div class=\"chips\">{chips}{add}</div>{}", if covered.is_empty() { String::new() } else { wrapped_note(&format!("The sets named also cover {}.", covered.join(", "))) })
+        format!("<div class=\"chips\">{chips}{add}{named}</div>{}", if covered.is_empty() { String::new() } else { wrapped_note(&format!("The sets named also cover {}.", covered.join(", "))) })
     }
 
     /// For a container of typed things: which kind of child a rule is
@@ -1109,11 +1123,10 @@ impl Editor {
     }
 
     fn parts_table(&self, r: &PartRule, fixed: bool) -> String {
-        let fits = [r.allow, r.deny].iter().all(|m| m & !0x130 == 0);
+        let fits = [r.allow, r.deny].iter().all(|m| m & !self.obj.part_mask() == 0);
         let key = r.ids[0];
         let advanced = !fits || self.shows_advanced.contains(&key);
-        let simple = [("Read", 0x10), ("Write", 0x20), ("Use (actions)", 0x100)];
-        let rights: Vec<(String, u32)> = if advanced { self.obj.specific.iter().map(|x| (x.name.clone(), x.mask)).collect() } else { simple.iter().map(|(n, m)| (n.to_string(), *m)).collect() };
+        let rights: Vec<(String, u32)> = if advanced { self.obj.specific.iter().map(|x| (x.name.clone(), x.mask)).collect() } else { self.obj.part_rights() };
         let k = key.to_string();
         let rows: String = rights
             .iter()
@@ -1177,12 +1190,12 @@ impl Editor {
 
     fn audit_table(&self, a: &Audit, fixed: bool) -> String {
         let key = a.ids[0];
-        let fits = if a.parts.is_some() { [a.ok, a.fail].iter().all(|m| m & !0x130 == 0) } else { [a.ok, a.fail].iter().all(|m| self.obj.fits_general(*m)) };
+        let fits = if a.parts.is_some() { [a.ok, a.fail].iter().all(|m| m & !self.obj.part_mask() == 0) } else { [a.ok, a.fail].iter().all(|m| self.obj.fits_general(*m)) };
         let advanced = !fits || self.shows_advanced.contains(&key);
         let mut rights: Vec<(String, u32)> = if advanced {
             self.obj.specific.iter().map(|x| (x.name.clone(), x.mask)).chain([("Read or change auditing".to_string(), ACCESS_SYSTEM_SECURITY)]).collect()
         } else if a.parts.is_some() {
-            [("Read", 0x10), ("Write", 0x20), ("Use (actions)", 0x100)].iter().map(|(n, m)| (n.to_string(), *m)).collect()
+            self.obj.part_rights()
         } else {
             self.obj.general.iter().map(|x| (x.name.clone(), x.mask)).collect()
         };
@@ -1806,6 +1819,27 @@ pub fn event(e: &mut Editor, name: &str, value: &Value, fields: &mut Fields) {
                 e.edit(|s, _, _, _| s.parts.retain(|r| r.ids.first() != Some(&k)));
             }
         }
+        // A part named rather than picked: its GUID from its name, and the
+        // part listed from then on, so it is said by its name.
+        "r-named" | "a-named" if (name == "r-named" && list) || (name == "a-named" && sacl) => {
+            let Some(k) = num("r") else { return };
+            let p = &name[..1];
+            let field = format!("{p}.{k}.named");
+            let typed = fields.get(&field).to_string();
+            let Some(g) = e.obj.named(&typed) else {
+                let noun = e.obj.naming.as_ref().map_or_else(|| "part".to_string(), |n| n.noun.clone());
+                e.wrong.insert(field, format!("Name the {noun}."));
+                return;
+            };
+            e.edit(|s, _, _, _| {
+                let parts = if p == "r" { s.rule_mut(k).map(|r| &mut r.parts) } else { s.audit_mut(k).and_then(|a| a.parts.as_mut()) };
+                if let Some(parts) = parts
+                    && !parts.contains(&g)
+                {
+                    parts.push(g);
+                }
+            });
+        }
         "r-delpart" if list => {
             let (Some(k), Some(g)) = (num("r"), guid_parse(&v("v"))) else { return };
             e.edit(|s, _, _, _| {
@@ -2025,6 +2059,12 @@ pub fn input(e: &mut Editor, name: &str, value: &str, _fields: &mut Fields) {
     // The owner dropdown's fields are a draft until Done.
     if parts[0] == "own" {
         e.typed.insert(name.to_string(), value.to_string());
+        return;
+    }
+    // A part's name is a draft until its Add is pressed.
+    if parts.last() == Some(&"named") {
+        e.typed.insert(name.to_string(), value.to_string());
+        e.wrong.remove(name);
         return;
     }
     match parts.as_slice() {

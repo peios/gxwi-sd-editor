@@ -248,6 +248,35 @@ fn only_the_misplaced_rule_for_a_part_is_kept_and_moving_it_frees_it() {
 }
 
 #[test]
+fn a_part_named_by_the_person_gets_its_guid_from_the_name() {
+    // As Event Viewer opens an events pattern: one right, eventd's fixed
+    // fields as parts, and any other field by name.
+    let mut e = editor(&format!("O:BAG:BAD:(A;;0x1;;;{})", sid(1105)), all());
+    let eventd = sd::guid_parse("e7d3a1b0-5c2f-4e8a-9b1d-0a6f3c8e2d4b").unwrap();
+    e.obj.part_rights = vec![("Read".into(), 0x1)];
+    e.obj.naming = Some(view::NamingDef { namespace: eventd, noun: "field".into(), example: Some("source.name".into()) });
+    e.obj.parts = vec![PartDef { guid: sd::named_guid(&eventd, "timestamp"), name: "timestamp".into(), kind: gxwi_sd_editor::PartKind::Property, set: None }];
+    press(&mut e, "pick", json!({ "sid": sid(1105) }));
+    press(&mut e, "tab", json!({ "v": "specific" }));
+    press(&mut e, "r-new", json!({}));
+    let key = e.simple().parts[0].ids[0];
+    let html = shown(&e);
+    assert!(html.contains("placeholder=\"Another field, such as source.name\"") && html.contains("Add Field"), "{html}");
+    assert!(html.contains("<th scope=\"row\">Read</th>"), "the part's own right, not a directory's: {html}");
+    // Nothing typed: said so.
+    press(&mut e, "r-named", json!({ "r": key.to_string() }));
+    assert_eq!(e.wrong.get(&format!("r.{key}.named")).map(String::as_str), Some("Name the field."));
+    let mut fields = Fields::default();
+    fields.set(&format!("r.{key}.named"), "source.name");
+    e.event("r-named", &json!({ "r": key.to_string() }), &mut fields);
+    let named = sd::named_guid(&eventd, "source.name");
+    assert_eq!(e.simple().parts[0].parts, [sd::named_guid(&eventd, "timestamp"), named]);
+    assert!(shown(&e).contains(">source.name<"));
+    let text = sddl_of(&e);
+    assert!(text.contains(&format!("(OA;OICI;0x1;{};;{})", sd::guid_text(&named), sid(1105))), "{text}");
+}
+
+#[test]
 fn what_could_not_be_pushed_into_says_its_insides_were_left() {
     let mut e = editor(&finance(), all());
     let failed = |n: usize| (0..n).map(|i| gxwi_sd_editor::Failure { name: format!("/srv/finance/q{i}"), why: "you are not allowed to".into() }).collect();

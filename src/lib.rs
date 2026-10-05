@@ -173,6 +173,29 @@ pub struct Object {
     /// rule can be passed on to alone: inherited object types.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kinds: Vec<ChildKind>,
+    /// What a rule for a part can give, where that is not what a
+    /// directory's parts take (reading and writing a property, using an
+    /// action): eventd's fields take only its Read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub part_rights: Vec<Right>,
+    /// Parts not listed that a person can name, as eventd's fields are:
+    /// there are more than can be listed, and each one's GUID comes from
+    /// its name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub naming: Option<Naming>,
+}
+
+/// How a part is named: its object type is UUID v5 (RFC 9562 §5.5) of its
+/// name, as UTF-8, in `namespace`. A part named so is a property.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Naming {
+    /// The namespace, as a GUID in its usual text form.
+    pub namespace: String,
+    /// What one such part is called, for the person: "field".
+    pub noun: String,
+    /// A name the person might give, to show how one is written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub example: Option<String>,
 }
 
 /// What an object is in.
@@ -617,11 +640,14 @@ mod tests {
         full.object.parent = Some(Parent { name: "/srv".into(), sd: Some(vec![1, 2]) });
         full.object.parts = vec![ObjectPart { guid: "77b5b886-944a-11d1-aebd-0000f80367c1".into(), name: "Personal information".into(), kind: PartKind::Set, set: None }];
         full.object.kinds = vec![ChildKind { guid: "bf967aba-0de6-11d0-a285-00aa003049e2".into(), name: "Accounts".into() }];
+        full.object.part_rights = vec![Right { name: "Read".into(), mask: 1, general: false }];
+        full.object.naming = Some(Naming { namespace: "e7d3a1b0-5c2f-4e8a-9b1d-0a6f3c8e2d4b".into(), noun: "field".into(), example: Some("source.name".into()) });
         let said = line(&full);
         assert!(said.contains("\"parent\":{\"name\":\"/srv\",\"sd\":\"AQI=\"}") && said.contains("\"read\":[\"owner\",\"group\",\"dacl\",\"label\"]"), "{said}");
+        assert!(said.contains("\"naming\":{\"namespace\":\"e7d3a1b0-5c2f-4e8a-9b1d-0a6f3c8e2d4b\",\"noun\":\"field\",\"example\":\"source.name\"}"), "{said}");
         assert_eq!(serde_json::from_str::<Request>(&said).unwrap(), full);
         let plain = line(&request());
-        assert!(!plain.contains("parent") && !plain.contains("parts") && !plain.contains("kinds") && !plain.contains("\"read\":["), "{plain}");
+        assert!(!plain.contains("parent") && !plain.contains("parts") && !plain.contains("kinds") && !plain.contains("naming") && !plain.contains("\"read\":["), "{plain}");
         let bare: Object = serde_json::from_str(r#"{"name":"x","kind":"Folder","parent":{"name":"/"}}"#).unwrap();
         assert_eq!(bare.parent, Some(Parent { name: "/".into(), sd: None }));
     }

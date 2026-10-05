@@ -18,7 +18,7 @@ required-features = ["program"]
 
 [features]
 default = ["program"]
-program = ["names", "dep:libgxwi", "dep:libc"]
+program = ["names", "dep:libgxwi", "dep:libc", "dep:sha1"]
 # Who a SID is, as the editor says it, for a program that shows who a
 # descriptor grants before the editor is opened.
 names = ["dep:peios", "dep:libauthd", "dep:libauthd-client"]
@@ -45,3 +45,5 @@ peios = { git = "https://github.com/peios/peios-rs.git", rev = "02c87cb643c30eef
 libauthd = { git = "https://github.com/peios/authd.git", rev = "4c2b7bddb0794731a22e1bad8ffe2f0affaf5d79", package = "libauthd", optional = true }
 libauthd-client = { git = "https://github.com/peios/authd.git", rev = "4c2b7bddb0794731a22e1bad8ffe2f0affaf5d79", package = "libauthd-client", optional = true }
 libc = { version = "0.2", optional = true }
+# UUID v5, for a part the person names (PSPU §8.2, `object.naming`).
+sha1 = { version = "0.10", optional = true }

@@ -53,9 +53,50 @@ pub struct Obj {
     pub generic: Generic,
     pub parts: Vec<PartDef>,
     pub kinds: Vec<(Guid, String)>,
+    /// What a rule for a part can give, where the program says.
+    pub part_rights: Vec<(String, u32)>,
+    /// How a part not listed is named, where one can be.
+    pub naming: Option<NamingDef>,
+}
+
+/// How a part not listed is named: its GUID is UUID v5 of its name in
+/// `namespace`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NamingDef {
+    pub namespace: Guid,
+    pub noun: String,
+    pub example: Option<String>,
 }
 
 impl Obj {
+    /// What a rule for a part can give: what the program says, or what a
+    /// directory's parts take.
+    pub fn part_rights(&self) -> Vec<(String, u32)> {
+        if self.part_rights.is_empty() {
+            return vec![("Read".into(), 0x10), ("Write".into(), 0x20), ("Use (actions)".into(), 0x100)];
+        }
+        self.part_rights.clone()
+    }
+
+    /// Every right a rule for a part can give.
+    pub fn part_mask(&self) -> u32 {
+        self.part_rights().iter().fold(0, |a, (_, m)| a | m)
+    }
+
+    /// The part `name` names, added to the parts if it isn't one already.
+    pub fn named(&mut self, name: &str) -> Option<Guid> {
+        let naming = self.naming.as_ref()?;
+        let name = name.trim();
+        if name.is_empty() {
+            return None;
+        }
+        let guid = named_guid(&naming.namespace, name);
+        if self.part(&guid).is_none() {
+            self.parts.push(PartDef { guid, name: name.to_string(), kind: PartKind::Property, set: None });
+        }
+        Some(guid)
+    }
+
     /// Where an entry can apply on it: the shape flags, and what they are
     /// called. "One level down" is a box of its own.
     pub fn scopes(&self) -> Vec<(u8, String)> {
@@ -703,6 +744,8 @@ pub mod tests {
             generic: Generic { read: 0x120089, write: 0x100116, execute: 0x1200a0, all: 0x1f01ff },
             parts: vec![],
             kinds: vec![],
+            part_rights: vec![],
+            naming: None,
         }
     }
 

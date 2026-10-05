@@ -442,6 +442,26 @@ pub fn guid_text(g: &Guid) -> String {
     )
 }
 
+/// UUID v5 (RFC 9562 §5.5) of `name`, as UTF-8, in `namespace`: how a
+/// part the person names gets its GUID. Both are in wire order, whose first
+/// three groups are little-endian; the hash takes them in the RFC's.
+pub fn named_guid(namespace: &Guid, name: &str) -> Guid {
+    use sha1::{Digest, Sha1};
+    let swap = |g: &mut Guid| {
+        g[0..4].reverse();
+        g[4..6].reverse();
+        g[6..8].reverse();
+    };
+    let mut ns = *namespace;
+    swap(&mut ns);
+    let digest = Sha1::new().chain_update(ns).chain_update(name.as_bytes()).finalize();
+    let mut g: Guid = digest[..16].try_into().expect("SHA-1 is 20 bytes");
+    g[6] = (g[6] & 0x0f) | 0x50;
+    g[8] = (g[8] & 0x3f) | 0x80;
+    swap(&mut g);
+    g
+}
+
 pub fn guid_parse(text: &str) -> Option<Guid> {
     let text = text.trim();
     let groups: Vec<&str> = text.split('-').collect();
@@ -517,5 +537,13 @@ mod tests {
         assert_eq!(&g[..4], &[0xba, 0x7a, 0x96, 0xbf]);
         assert_eq!(guid_text(&g), text);
         assert!(guid_parse("bf967aba").is_none());
+    }
+
+    #[test]
+    fn a_named_part_has_the_guid_eventd_gives_it() {
+        // eventd's field namespace, and its stable vector for "timestamp"
+        // (eventd-client access.rs).
+        let eventd = guid_parse("e7d3a1b0-5c2f-4e8a-9b1d-0a6f3c8e2d4b").unwrap();
+        assert_eq!(named_guid(&eventd, "timestamp"), [0x67, 0x22, 0x1d, 0x34, 0xdb, 0xb9, 0x6b, 0x53, 0xb3, 0x6c, 0x94, 0xab, 0x6c, 0xd4, 0x7e, 0x4c]);
     }
 }

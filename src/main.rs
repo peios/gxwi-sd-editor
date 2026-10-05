@@ -43,7 +43,7 @@ use edit::CondOf;
 use known::Known;
 use learned::Learned;
 use sd::{Acl, Ace, Descriptor, Found, Guid, Ids, Way};
-use view::{Obj, PartDef, Simple};
+use view::{NamingDef, Obj, PartDef, Simple};
 
 // What this program looks like on its dialog's strip. The icon itself is
 // `gxwi-sd-editor.svg`, installed as the base theme's.
@@ -233,6 +233,8 @@ impl Editor {
                 .filter_map(|p| Some(PartDef { guid: sd::guid_parse(&p.guid)?, name: p.name.clone(), kind: p.kind, set: p.set.as_deref().and_then(sd::guid_parse) }))
                 .collect(),
             kinds: object.kinds.iter().filter_map(|k| Some((sd::guid_parse(&k.guid)?, k.name.clone()))).collect(),
+            part_rights: object.part_rights.iter().map(|r| (r.name.clone(), r.mask)).collect(),
+            naming: object.naming.as_ref().and_then(|n| Some(NamingDef { namespace: sd::guid_parse(&n.namespace)?, noun: n.noun.clone(), example: n.example.clone() })),
         };
         for ace in sd.dacl.iter().chain(&sd.sacl).flat_map(|a| &a.aces) {
             if let Some(sid) = &ace.sid {
