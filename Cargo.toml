@@ -39,7 +39,7 @@ serde_json = "1"
 # The dialog role is not in a released libgxwi yet: until it is, the one
 # beside this checkout.
 libgxwi = { path = "../gxwi/libgxwi", optional = true }
-peios = { git = "https://github.com/peios/peios-rs.git", rev = "2a2a6bb022192f6e98d4e4a6a7efdbdd40d53b35", package = "peios", optional = true }
+peios = { git = "https://github.com/peios/peios-rs.git", rev = "02c87cb643c30eef6b74cd1d9d8b0ae067bed69a", package = "peios", optional = true }
 # Who a SID is, asked of authd's identity socket through the client every
 # program asking it shares.
 libauthd = { git = "https://github.com/peios/authd.git", rev = "4c2b7bddb0794731a22e1bad8ffe2f0affaf5d79", package = "libauthd", optional = true }
