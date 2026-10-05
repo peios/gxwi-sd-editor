@@ -39,6 +39,14 @@ given only to whom KACS allows: the person themselves, a group they may own
 things as, or anyone with SeRestorePrivilege. Who the person is comes from the
 editor's own token, which is the program's.
 .PP
+On a container whose program says it can, changing what the container
+passes down asks, on Apply or OK, whether to update what is already inside
+it too. Things made inside afterwards get the change by themselves; things
+already there keep what they were given unless they are updated. Updating
+is the program's to do, as PCDS \(sc5.6 sets out: the dialog shows how far it
+has got and can stop it, and afterwards says what could not be updated and
+why.
+.PP
 Where a claim or a value is typed, the editor suggests the claims the machine
 defines first, then those rules applied here have used, most used first. Both
 are kept in the registry, as described under CLAIM CATALOGUE.
