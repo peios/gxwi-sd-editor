@@ -40,6 +40,11 @@ body {
 }
 
 #fx-root[data-connected="false"] { opacity: 0.5; }
+/* .fit is as wide as the dialog asks to be, which a narrow dialog is not:
+   what it has beyond the edge is clipped, so not even a drag selecting text
+   scrolls the page sideways. Clipping makes no scroll container, so the
+   footer still sticks to the page's foot. */
+#fx-root { overflow-x: clip; }
 
 .fit { width: 56rem; }
 /* Tall enough for most of what it shows, so going from tab to tab does not
@@ -341,12 +346,14 @@ footer .status { flex: 1; color: var(--text-muted); }
     button.xrow { grid-template-columns: 1.4rem 2.7rem minmax(0, 1fr) auto; row-gap: 2px; }
     .xr, .xs { grid-column: 3 / -1; }
     .xbs { grid-column: 4; grid-row: 1; }
-    /* Closer tabs, so all four fit beside the switch. */
+    /* The switch goes above the tabs, and the tabs closer, so all four fit. */
+    .toptabs { flex-wrap: wrap; }
+    .advswitch { order: -1; flex-basis: 100%; box-sizing: border-box; justify-content: flex-end; padding: 0 0 4px; }
     .toptabs button { padding-inline: 8px; }
 }
 @media (max-width: 560px) {
-    .toptabs { flex-wrap: wrap; }
-    .advswitch { order: -1; flex-basis: 100%; box-sizing: border-box; justify-content: flex-end; padding: 0 0 4px; }
+    /* Too narrow for all four in a row: the last goes under the rest. */
+    .tabrow { flex-wrap: wrap; }
     .listed { max-height: 20rem; }
     .owners { position: static; width: 100%; }
     .inherit .links { grid-column: 2 / -1; align-items: flex-start; justify-self: start; }
