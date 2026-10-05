@@ -42,15 +42,22 @@ body {
 #fx-root[data-connected="false"] { opacity: 0.5; }
 
 .fit { width: 56rem; }
+/* Tall enough for most of what it shows, so going from tab to tab does not
+   make the dialog jump about. */
 .editor {
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
     width: 100vw;
     max-width: 56rem;
+    min-height: 40rem;
     box-sizing: border-box;
     padding: var(--space-4);
 }
+.editor > footer { margin-top: auto; }
+/* A button for adding something sits at the start of its column, as wide as
+   its words. */
+.editor > button, .pane > button, .rule > button, .xed .fld > button { align-self: flex-start; }
 
 header h1 { margin: 0; font-size: 16px; font-weight: 700; overflow-wrap: anywhere; }
 header p { margin: 2px 0 0; color: var(--text-muted); font-size: 12px; }
@@ -308,7 +315,21 @@ pre.sddl { margin: 0; padding: var(--space-3); border-radius: var(--radius-sm); 
 .wrong { flex-basis: 100%; margin: 0; color: var(--danger-text); font-size: 12px; font-weight: 500; }
 .trouble { margin: 0; padding: var(--space-2) var(--space-3); color: var(--danger-text); border: 1px solid var(--danger-text); border-radius: var(--radius-sm); overflow-wrap: anywhere; }
 
-footer { display: flex; align-items: center; gap: var(--space-2); }
+/* OK, Cancel and Apply stay in sight at the foot of the dialog, however far
+   down what is shown goes. */
+footer {
+    position: sticky;
+    bottom: 0;
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0 calc(-1 * var(--space-4)) calc(-1 * var(--space-4));
+    padding: var(--space-3) var(--space-4);
+    background: color-mix(in srgb, var(--bg-base) 90%, transparent);
+    backdrop-filter: blur(10px);
+    border-top: 1px solid var(--border-subtle);
+}
 footer .status { flex: 1; color: var(--text-muted); }
 
 /* A dialog given half the screen, or less. */

@@ -579,7 +579,7 @@ impl Editor {
         let right = if adv_only {
             "<span class=\"from\">Advanced Only</span>".to_string()
         } else if inherited {
-            format!("<span class=\"from\">↳ From {}</span><span class=\"lvl\">{LOCK}{}</span>", h(&self.from_word()), h(&self.inherited_level(&s, sid)))
+            format!("<span class=\"from\" title=\"From {}\">↳ Inherited</span><span class=\"lvl\">{LOCK}{}</span>", h(&self.from_word()), h(&self.inherited_level(&s, sid)))
         } else if audited_only {
             "<span class=\"from\">Audited Only</span>".into()
         } else {
