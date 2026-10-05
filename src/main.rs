@@ -19,7 +19,7 @@ use std::io::{BufRead, Write};
 use std::sync::Arc;
 
 use gxwi_sd_editor::names::Names;
-use gxwi_sd_editor::{Can, FromEditor, Part, Request, ToEditor, line};
+use gxwi_sd_editor::{Can, FromEditor, Part, Request, ToEditor, Walked, line};
 use libgxwi::{App, Closer, Facts, Fields, Live, Value};
 use peios::security::Sid;
 
@@ -105,6 +105,9 @@ pub enum Asking {
     Owner,
     /// Whether to keep or remove what is inherited, on stopping it.
     Stop(Side),
+    /// Whether to push what this container now passes down into what is
+    /// already inside it, on Apply or OK.
+    Push { then_close: bool },
 }
 
 /// Where the descriptor is with the program.
@@ -112,6 +115,16 @@ pub enum Asking {
 pub enum Sending {
     No,
     Yes { then_close: bool },
+}
+
+/// How far pushing into what is inside has got, while it goes on.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Pushing {
+    pub done: u64,
+    /// The last item done.
+    pub at: String,
+    /// Whether the person asked for it to stop.
+    pub stopping: bool,
 }
 
 pub struct Editor {
@@ -163,6 +176,11 @@ pub struct Editor {
     pub trouble: Option<String>,
     pub status: String,
     pub sending: Sending,
+    /// Pushing into what is inside, while it goes on; how it went, after;
+    /// and the parts it was for, to push them again.
+    pub pushing: Option<Pushing>,
+    pub pushed: Option<Walked>,
+    pub push_parts: Vec<Part>,
     pub closer: Option<Closer>,
     /// Whom Effective Access is for, and for which part.
     pub eff_who: Option<Sid>,
@@ -252,6 +270,9 @@ impl Editor {
             trouble: None,
             status: String::new(),
             sending: Sending::No,
+            pushing: None,
+            pushed: None,
+            push_parts: Vec::new(),
             closer: None,
             eff_who: None,
             eff_part: None,
@@ -448,13 +469,53 @@ impl Editor {
             .collect()
     }
 
-    /// Sends the program the descriptor as it stands, if anything changed
-    /// that it can apply. Whether anything was sent.
-    fn send(&mut self, then_close: bool) -> bool {
+    /// Whether what this container passes down differs, in the parts to be
+    /// sent, from what the program has: its entries that go on to what is
+    /// inside, inherited or its own.
+    pub fn passes_changed(&self, parts: &[Part]) -> bool {
+        let passed = |acl: &Option<Acl>| -> Option<Vec<Option<Vec<u8>>>> {
+            acl.as_ref().map(|a| {
+                let mut v: Vec<_> = a.aces.iter().filter(|x| x.flags & (sd::OI | sd::CI) != 0).map(|x| sd::ace_bytes(x, &self.found).ok()).collect();
+                v.sort();
+                v
+            })
+        };
+        (parts.contains(&Part::Dacl) && passed(&self.sd.dacl) != passed(&self.applied.dacl))
+            || ((parts.contains(&Part::Sacl) || parts.contains(&Part::Label)) && passed(&self.sd.sacl) != passed(&self.applied.sacl))
+    }
+
+    /// On Apply or OK: asks whether to push into what is inside first,
+    /// where that is what changed and the program can, or else sends.
+    /// Whether anything is under way.
+    fn apply_or_ask(&mut self, then_close: bool) -> bool {
         if self.sending != Sending::No {
             return false;
         }
         let parts = self.sendable(&self.changed());
+        if self.can.propagate && self.obj.container && !parts.is_empty() && self.passes_changed(&parts) {
+            if let Some((why, place)) = self.fault() {
+                self.checked = true;
+                self.trouble = Some(why);
+                self.go(place);
+                return false;
+            }
+            self.asking = Some(Asking::Push { then_close });
+            return true;
+        }
+        self.send(then_close, false)
+    }
+
+    /// Sends the program the descriptor as it stands, if anything changed
+    /// that it can apply, and asks it to push into what is inside if
+    /// `push`. Whether anything was sent.
+    fn send(&mut self, then_close: bool, push: bool) -> bool {
+        if self.sending != Sending::No {
+            return false;
+        }
+        let parts = self.sendable(&self.changed());
+        // Pushing again what was pushed before, when nothing has changed
+        // since: it is applied again as it is, which changes nothing.
+        let parts = if parts.is_empty() && push { self.push_parts.clone() } else { parts };
         if parts.is_empty() {
             return false;
         }
@@ -471,34 +532,65 @@ impl Editor {
                 return false;
             }
         };
-        let said = line(&FromEditor::Apply { sd, parts });
-        let mut out = std::io::stdout().lock();
-        if out.write_all(said.as_bytes()).and_then(|()| out.flush()).is_err() {
+        let push = push && self.can.propagate;
+        if !say(&FromEditor::Apply { sd, parts: parts.clone(), propagate: push }) {
             self.trouble = Some("The program that opened this has gone, and nothing can be applied.".into());
             return false;
         }
         self.checked = false;
         self.sending = Sending::Yes { then_close };
+        self.pushed = None;
+        if push {
+            self.pushing = Some(Pushing::default());
+            self.push_parts = parts;
+        }
         self.status = "Applying…".into();
         true
     }
 
+    /// Asks the program to stop pushing into what is inside.
+    fn stop_pushing(&mut self) {
+        if let Some(p) = &mut self.pushing
+            && !p.stopping
+            && say(&FromEditor::Stop)
+        {
+            p.stopping = true;
+        }
+    }
+
     /// What the program answered. Whether the dialog is done with.
     fn answered(&mut self, answer: ToEditor) -> bool {
+        if let ToEditor::Progress { done, at } = answer {
+            if let Some(p) = &mut self.pushing {
+                p.done = done;
+                p.at = at;
+            }
+            return false;
+        }
         let Sending::Yes { then_close } = std::mem::replace(&mut self.sending, Sending::No) else { return false };
         self.status.clear();
+        let pushed = self.pushing.take().is_some();
         match answer {
-            ToEditor::Applied => {
+            ToEditor::Applied { done, failed, stopped } => {
                 self.learn();
                 self.applied = self.sd.clone();
                 self.trouble = None;
-                self.status = "Applied.".into();
-                then_close
+                if !pushed {
+                    self.status = "Applied.".into();
+                    return then_close;
+                }
+                let whole = failed.is_empty() && !stopped;
+                if whole {
+                    self.status = format!("Applied, and {} inside updated.", items(done));
+                }
+                self.pushed = Some(Walked { done, failed, stopped });
+                then_close && whole
             }
             ToEditor::Failed { why } => {
                 self.trouble = Some(format!("This could not be applied: {why}"));
                 false
             }
+            ToEditor::Progress { .. } => false,
         }
     }
 
@@ -594,20 +686,35 @@ impl Live for Editor {
         let v = |k: &str| value[k].as_str().unwrap_or("").to_string();
         match name {
             "apply" => {
-                self.send(false);
+                self.apply_or_ask(false);
             }
             "ok" => {
-                if self.sending == Sending::No && !self.send(true) && self.trouble.is_none() && self.sendable(&self.changed()).is_empty() {
+                if self.sending == Sending::No && !self.apply_or_ask(true) && self.trouble.is_none() && self.sendable(&self.changed()).is_empty() {
                     self.close();
                 }
             }
+            "push" => {
+                if let Some(Asking::Push { then_close }) = self.asking {
+                    self.asking = None;
+                    self.send(then_close, v("v") == "all");
+                }
+            }
+            "push-again" => {
+                self.send(false, true);
+            }
+            "push-done" => self.pushed = None,
+            // Cancel while what is inside is being pushed into stops that,
+            // and the dialog stays to say how far it got.
+            "cancel" | "stop-push" if self.pushing.is_some() => self.stop_pushing(),
             "cancel" => self.close(),
             "keep" => {
                 self.asking = None;
                 self.wrong.clear();
             }
             "escape" => {
-                if self.asking.is_some() {
+                if self.pushing.is_some() {
+                    self.stop_pushing();
+                } else if self.asking.is_some() {
                     self.asking = None;
                     self.wrong.clear();
                 } else {
@@ -702,6 +809,25 @@ fn main() {
     if let Err(e) = app.run() {
         die(&e.to_string());
     }
+}
+
+/// Writes one line to the program. Whether it could.
+fn say(message: &FromEditor) -> bool {
+    let mut out = std::io::stdout().lock();
+    out.write_all(line(message).as_bytes()).and_then(|()| out.flush()).is_ok()
+}
+
+/// "1 item", "1,204 items".
+pub fn items(n: u64) -> String {
+    let digits = n.to_string();
+    let mut grouped = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(c);
+    }
+    format!("{grouped} item{}", if n == 1 { "" } else { "s" })
 }
 
 fn die(why: &str) -> ! {

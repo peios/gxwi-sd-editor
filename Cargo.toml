@@ -28,6 +28,9 @@ splice = ["dep:peios"]
 # A registry key's rights in words, and the editor opened on a key's own
 # descriptor, for a program that shows registry keys.
 registry = ["dep:peios"]
+# Pushing what a container passes down into what is inside it, for a
+# program that holds a tree of things with descriptors.
+propagate = ["dep:peios"]
 
 [dependencies]
 base64 = "0.22"

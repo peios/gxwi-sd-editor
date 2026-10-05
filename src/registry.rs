@@ -104,6 +104,83 @@ pub fn key(path: &str, name: &str, cannot: &str) -> Result<(Request, Apply), Str
     Ok((request, Box::new(apply)))
 }
 
+/// A key and every key under it, for pushing its descriptor into them
+/// ([`crate::edit_tree`]): a node is a key's path, as [`key`] takes it.
+/// Each is opened as itself, a link not followed, and a link is neither
+/// changed nor walked through.
+#[cfg(feature = "propagate")]
+pub struct Keys;
+
+/// The walk's parts of a descriptor as the registry names them: the same
+/// KACS bits, by another type.
+#[cfg(feature = "propagate")]
+fn reg(info: peios::file::SecInfo) -> SecInfo {
+    SecInfo::from_bits_truncate(info.bits())
+}
+
+#[cfg(feature = "propagate")]
+impl Keys {
+    fn open(path: &str, access: KeyAccess) -> Result<Key, String> {
+        Key::open(None, path, access, OpenFlags::OPEN_LINK).map_err(|e| if e.raw_os_error() == Some(EACCES) { "you are not allowed to".to_string() } else { e.to_string() })
+    }
+
+    /// What opening for `info` takes.
+    fn access(info: SecInfo, write: bool) -> KeyAccess {
+        let mut access = if write { KeyAccess::empty() } else { KeyAccess::READ_CONTROL };
+        if info.intersects(SecInfo::SACL) {
+            access |= KeyAccess::ACCESS_SYSTEM_SECURITY;
+        }
+        if write && info.intersects(SecInfo::DACL) {
+            access |= KeyAccess::WRITE_DAC;
+        }
+        if write && info.intersects(SecInfo::OWNER | SecInfo::GROUP | SecInfo::LABEL) {
+            access |= KeyAccess::WRITE_OWNER;
+        }
+        access
+    }
+}
+
+#[cfg(feature = "propagate")]
+impl crate::propagate::Tree for Keys {
+    type Node = String;
+
+    fn children(&mut self, node: &String) -> Result<Vec<String>, String> {
+        let key = Keys::open(node, KeyAccess::ENUMERATE_SUB_KEYS)?;
+        let mut inside = Vec::new();
+        for sub in key.subkeys(None) {
+            let sub = sub.map_err(|e| e.to_string())?;
+            let path = format!("{node}\\{}", String::from_utf8_lossy(&sub.name));
+            // A link is left out: what it leads to is somewhere else.
+            let link = Key::open(None, &path, KeyAccess::READ_CONTROL, OpenFlags::OPEN_LINK).ok().and_then(|k| k.info().ok()).is_some_and(|i| i.symlink);
+            if !link {
+                inside.push(path);
+            }
+        }
+        Ok(inside)
+    }
+
+    fn name(&self, node: &String) -> String {
+        node.clone()
+    }
+
+    fn container(&self, _: &String) -> bool {
+        true
+    }
+
+    fn read(&mut self, node: &String, info: peios::file::SecInfo) -> Result<Vec<u8>, String> {
+        let info = reg(info);
+        let key = Keys::open(node, Keys::access(info, false))?;
+        key.get_security(info).map(|sd| sd.as_bytes().to_vec()).map_err(|e| e.to_string())
+    }
+
+    fn write(&mut self, node: &String, sd: &[u8], info: peios::file::SecInfo) -> Result<(), String> {
+        let info = reg(info);
+        let key = Keys::open(node, Keys::access(info, true))?;
+        let sd = SecurityDescriptor::from_validated_bytes(sd.to_vec()).map_err(|e| format!("what was worked out is not a security descriptor ({e})"))?;
+        key.set_security(info, &sd, None).map_err(|e| if e.raw_os_error() == Some(EACCES) { "you are not allowed to".to_string() } else { e.to_string() })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

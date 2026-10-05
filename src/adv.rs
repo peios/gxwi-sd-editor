@@ -9,7 +9,8 @@
 //! moved or removed, and goes back exactly as it came.
 
 use libgxwi::{Fields, Value, escape as h};
-use peios::security::Sid;
+use peios::file::SecInfo;
+use peios::security::{GenericMapping, Sid};
 
 use crate::claim::{self, Claim, ClaimType};
 use crate::cond::{self, Cond, Node};
@@ -659,71 +660,60 @@ pub fn fault(e: &Editor) -> Option<(String, Place)> {
 
 // ---- inheriting again
 
-/// Takes the access list's inherited entries back from the parent's, as
-/// libpeios works them out (MS-DTYP §2.5.3.4): this object's own stay as
-/// they are, and the parent's come after them.
+/// Takes the access list's inherited entries back from the parent's.
 pub fn reinherit_dacl(e: &mut Editor, parent: &[u8]) {
-    e.sd.control &= !PD;
+    reinherit(e, parent, List::Dacl);
+}
+
+/// Takes the SACL's inherited entries back from the parent's.
+pub fn reinherit_sacl(e: &mut Editor, parent: &[u8]) {
+    reinherit(e, parent, List::Sacl);
+}
+
+/// Unprotects `list` and takes its inherited entries back from `parent`'s,
+/// as KACS gives them to an object it creates (PCDS §5.6, re-propagation,
+/// which libpeios does): this object's own stay as they are, and the
+/// parent's come after them.
+fn reinherit(e: &mut Editor, parent: &[u8], list: List) {
+    let (bit, auto, info) = match list {
+        List::Dacl => (PD, DI, SecInfo::DACL),
+        List::Sacl => (PS, SI, SecInfo::SACL),
+    };
+    let was = e.sd.control;
+    e.sd.control &= !bit;
     let child = match e.sd.build(&e.found) {
         Ok(b) => b,
         Err(why) => {
             e.trouble = Some(why);
-            e.sd.control |= PD;
+            e.sd.control = was;
             return;
         }
     };
-    let result = match peios::security::reinherit(parent, &child, e.obj.container) {
+    let g = e.obj.generic;
+    let mapping = GenericMapping::new(g.read, g.write, g.execute, g.all);
+    let result = match peios::security::reinherit_with(parent, &child, e.obj.container, Some(&mapping), info) {
         Ok(sd) => sd,
         Err(why) => {
             e.trouble = Some(format!("What {} passes down could not be worked out: {why}.", e.from_word()));
-            e.sd.control |= PD;
+            e.sd.control = was;
             return;
         }
     };
     let mut found = Found::default();
     let Ok(got) = Descriptor::parse(result.as_bytes(), &mut e.ids, &mut found) else { return };
-    let inherited: Vec<Ace> = got.dacl.map(|d| d.aces.into_iter().filter(Ace::inherited).collect()).unwrap_or_default();
-    if let Some(dacl) = &mut e.sd.dacl {
-        dacl.aces.retain(|a| !a.inherited());
-        dacl.aces.extend(inherited);
-    }
-    e.sd.control |= DI;
-}
-
-/// The flags an entry of the parent's is passed down with, or `None` if it
-/// is not passed to this object (PCDS §5.6).
-fn passed(flags: u8, container: bool) -> Option<u8> {
-    let shape = OI | CI | NP | IO;
-    if container {
-        if flags & CI != 0 {
-            let f = if flags & NP != 0 { flags & !shape } else { flags & !IO };
-            Some(f | ID)
-        } else if flags & OI != 0 && flags & NP == 0 {
-            Some(flags | IO | ID)
-        } else {
-            None
-        }
-    } else if flags & OI != 0 {
-        Some((flags & !shape) | ID)
-    } else {
-        None
-    }
-}
-
-/// Takes the SACL's inherited entries back from the parent's.
-pub fn reinherit_sacl(e: &mut Editor, parent: &[u8]) {
-    let mut found = Found::default();
-    let Ok(p) = Descriptor::parse(parent, &mut e.ids, &mut found) else {
-        e.trouble = Some(format!("What {} passes down could not be read.", e.from_word()));
-        return;
+    let (theirs, mine) = match list {
+        List::Dacl => (got.dacl, &mut e.sd.dacl),
+        List::Sacl => (got.sacl, &mut e.sd.sacl),
     };
-    let container = e.obj.container;
-    let inherited: Vec<Ace> = p.sacl.map(|s| s.aces.into_iter().filter_map(|a| passed(a.flags, container).map(|f| Ace { flags: f, ..a })).collect()).unwrap_or_default();
-    let sacl = e.sd.sacl.get_or_insert(Acl { revision: 2, aces: vec![] });
-    sacl.aces.retain(|a| !a.inherited());
-    sacl.aces.extend(inherited);
-    e.sd.control &= !PS;
-    e.sd.control |= SI;
+    let inherited: Vec<Ace> = theirs.map(|l| l.aces.into_iter().filter(Ace::inherited).collect()).unwrap_or_default();
+    if mine.is_none() && !inherited.is_empty() {
+        *mine = Some(Acl { revision: 2, aces: vec![] });
+    }
+    if let Some(l) = mine {
+        l.aces.retain(|a| !a.inherited());
+        l.aces.extend(inherited);
+    }
+    e.sd.control |= auto;
 }
 
 // ---- what the controls do
@@ -1043,17 +1033,3 @@ pub fn input(e: &mut Editor, name: &str, value: &str) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn what_is_passed_down_is_as_the_inheritance_rules_say() {
-        assert_eq!(passed(OI | CI, true), Some(OI | CI | ID));
-        assert_eq!(passed(OI | CI | NP, true), Some(ID));
-        assert_eq!(passed(OI, true), Some(OI | IO | ID));
-        assert_eq!(passed(OI | CI | IO, false), Some(ID));
-        assert_eq!(passed(CI, false), None);
-        assert_eq!(passed(0, true), None);
-    }
-}

@@ -12,8 +12,12 @@
 //! registry keys and services alike.
 //!
 //!   program → editor   the first line: a [`Request`]
-//!   editor → program   { "type": "apply", "sd", "parts" }   on Apply or OK
-//!   program → editor   { "type": "applied" }
+//!   editor → program   { "type": "apply", "sd", "parts", "propagate"? }
+//!                                                          on Apply or OK
+//!   program → editor   { "type": "progress", "done", "at" }   while it
+//!                                                pushes into what is inside
+//!   editor → program   { "type": "stop" }          stop pushing, if it is
+//!   program → editor   { "type": "applied", "done"?, "failed"?, "stopped"? }
 //!                   or { "type": "failed", "why" }
 //!
 //! `sd` is a self-relative security descriptor's bytes, in base64, whichever
@@ -26,6 +30,12 @@
 //! take away the access needed to finish. A failure is shown in the dialog,
 //! which stays open to be put right.
 //!
+//! A program that holds a tree, and says it can (`can.propagate`), may be
+//! asked as well to push what a container passes down into what is already
+//! inside it, after applying: it says how far it has got as it goes, stops
+//! when it is told to, and answers with how many it did, which it could not
+//! and why. [`edit_tree`] and [`propagate::walk`] do this for it.
+//!
 //! The editor ends when the person closes it, and after OK once what it sent
 //! has been applied, and its output closing is how the program knows. It
 //! ends when its input closes as well, so it goes when the program does,
@@ -37,11 +47,15 @@
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "names")]
 pub mod names;
+#[cfg(feature = "propagate")]
+pub mod propagate;
 #[cfg(feature = "registry")]
 pub mod registry;
 
@@ -255,6 +269,11 @@ pub struct Can {
     /// the `label` part. Left out, it cannot, and is never sent it.
     #[serde(default)]
     pub label: bool,
+    /// Whether it can push what this container passes down to what is
+    /// already inside it (PCDS §5.6, Re-propagation): it is then sent
+    /// `propagate` with an `apply`, and does the walk. Left out, it cannot.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub propagate: bool,
     /// Why it cannot change what it cannot, for the person to read: "You
     /// may not change this service's definition."
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -263,12 +282,20 @@ pub struct Can {
 
 impl Default for Can {
     fn default() -> Can {
-        Can { dacl: true, owner: false, audit: false, label: false, why: None }
+        Can { dacl: true, owner: false, audit: false, label: false, propagate: false, why: None }
     }
 }
 
 fn yes() -> bool {
     true
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 /// A part of a descriptor, as the program applies it.
@@ -292,16 +319,62 @@ pub enum FromEditor {
         #[serde(with = "base64_bytes")]
         sd: Vec<u8>,
         parts: Vec<Part>,
+        /// Once it is applied, push what it passes down into what is
+        /// already inside, for the parts applied. Only to a program that
+        /// said it can (`can.propagate`).
+        #[serde(default, skip_serializing_if = "is_false")]
+        propagate: bool,
     },
+    /// Stop pushing into what is inside, after the item in hand. What has
+    /// been done stays done.
+    Stop,
 }
 
-/// What the program answers an `apply` with.
+/// What the program answers an `apply` with, and tells the editor while it
+/// pushes into what is inside.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToEditor {
-    Applied,
+    /// It was applied. Where it was pushed into what is inside too: how
+    /// many items were, which could not be and why, and whether the person
+    /// stopped it before the end.
+    Applied {
+        #[serde(default, skip_serializing_if = "is_zero")]
+        done: u64,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        failed: Vec<Failure>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        stopped: bool,
+    },
     /// Why it could not be applied, for the person to read.
     Failed { why: String },
+    /// How far pushing into what is inside has got: how many items are
+    /// done, and the last, by what it is called where the person knows it.
+    /// Needs no answer.
+    Progress { done: u64, at: String },
+}
+
+impl ToEditor {
+    /// Applied, and nothing pushed into what is inside.
+    pub fn applied() -> ToEditor {
+        ToEditor::Applied { done: 0, failed: Vec::new(), stopped: false }
+    }
+}
+
+/// An item inside that what was applied could not be pushed into.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Failure {
+    /// What it is called where the person knows it: `/srv/finance/q3.xlsx`.
+    pub name: String,
+    pub why: String,
+}
+
+/// How pushing into what is inside went.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Walked {
+    pub done: u64,
+    pub failed: Vec<Failure>,
+    pub stopped: bool,
 }
 
 /// One line of the protocol: `message` as JSON, and the newline.
@@ -329,7 +402,65 @@ pub fn edit(
 pub fn edit_with(
     program: &Path,
     request: &Request,
+    apply: impl FnMut(&[u8], &[Part]) -> Result<(), String> + Send + 'static,
+    done: impl FnOnce() + Send + 'static,
+) -> io::Result<()> {
+    run(program, request, apply, None, done)
+}
+
+/// Pushes what was applied into what is inside: given the parts applied, a
+/// flag the person's Stop sets, and where to say how far it has got.
+pub type Walk = Box<dyn FnMut(&[Part], &AtomicBool, &mut dyn FnMut(u64, &str)) -> Walked + Send>;
+
+/// Opens the editor at [`PROGRAM`] on a container whose program can push
+/// what it passes down into what is inside, which is [`edit_tree_with`].
+#[cfg(feature = "propagate")]
+pub fn edit_tree<T: propagate::Tree + Send + 'static>(
+    request: &Request,
+    apply: impl FnMut(&[u8], &[Part]) -> Result<(), String> + Send + 'static,
+    tree: T,
+    root: T::Node,
+    done: impl FnOnce() + Send + 'static,
+) -> io::Result<()>
+where
+    T::Node: Send,
+{
+    edit_tree_with(Path::new(PROGRAM), request, apply, tree, root, done)
+}
+
+/// [`edit_with`], and when the person asks for what was applied to `root`
+/// to be pushed into what is inside it, walks `tree` from `root`
+/// ([`propagate::walk`]), telling the editor how far it has got and
+/// stopping when it is told to. Set `can.propagate` in `request` so the
+/// editor offers it.
+#[cfg(feature = "propagate")]
+pub fn edit_tree_with<T: propagate::Tree + Send + 'static>(
+    program: &Path,
+    request: &Request,
+    apply: impl FnMut(&[u8], &[Part]) -> Result<(), String> + Send + 'static,
+    mut tree: T,
+    root: T::Node,
+    done: impl FnOnce() + Send + 'static,
+) -> io::Result<()>
+where
+    T::Node: Send,
+{
+    let generic = request.generic;
+    let walk: Walk = Box::new(move |parts, stop, progress| propagate::walk(&mut tree, &root, parts, generic, stop, progress));
+    run(program, request, apply, Some(walk), done)
+}
+
+/// How often at most the editor is told how far a walk has got.
+const PROGRESS_EVERY: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// Starts the editor and speaks for the program. What the editor says is
+/// read on one thread, so a Stop is heard while another applies and walks;
+/// only that other one writes to the editor.
+fn run(
+    program: &Path,
+    request: &Request,
     mut apply: impl FnMut(&[u8], &[Part]) -> Result<(), String> + Send + 'static,
+    mut walk: Option<Walk>,
     done: impl FnOnce() + Send + 'static,
 ) -> io::Result<()> {
     let mut child = Command::new(program).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
@@ -341,17 +472,49 @@ pub fn edit_with(
         let _ = child.wait();
         return Err(e);
     }
+    let stop = Arc::new(AtomicBool::new(false));
+    let (tell, asked) = std::sync::mpsc::channel::<(Vec<u8>, Vec<Part>, bool)>();
+    let heard = Arc::clone(&stop);
     std::thread::spawn(move || {
         for said in BufReader::new(output).lines() {
             let Ok(said) = said else { break };
             // A line this does not know is not answered: a newer editor may
             // say more than this knows of.
-            let Ok(FromEditor::Apply { sd, parts }) = serde_json::from_str(&said) else { continue };
+            match serde_json::from_str(&said) {
+                Ok(FromEditor::Apply { sd, parts, propagate }) => {
+                    if tell.send((sd, parts, propagate)).is_err() {
+                        break;
+                    }
+                }
+                Ok(FromEditor::Stop) => heard.store(true, Ordering::Relaxed),
+                Err(_) => {}
+            }
+        }
+        // The editor has gone: nobody is there to see a walk go on.
+        heard.store(true, Ordering::Relaxed);
+    });
+    std::thread::spawn(move || {
+        let mut say = |message: &ToEditor| input.write_all(line(message).as_bytes()).and_then(|()| input.flush()).is_ok();
+        for (sd, parts, propagate) in asked {
             let answer = match apply(&sd, &parts) {
-                Ok(()) => ToEditor::Applied,
                 Err(why) => ToEditor::Failed { why },
+                Ok(()) => match (&mut walk, propagate) {
+                    (Some(walk), true) => {
+                        stop.store(false, Ordering::Relaxed);
+                        let mut last = std::time::Instant::now();
+                        let mut gone = false;
+                        let walked = walk(&parts, &stop, &mut |done, at| {
+                            if !gone && last.elapsed() >= PROGRESS_EVERY {
+                                last = std::time::Instant::now();
+                                gone = !say(&ToEditor::Progress { done, at: at.to_string() });
+                            }
+                        });
+                        ToEditor::Applied { done: walked.done, failed: walked.failed, stopped: walked.stopped }
+                    }
+                    _ => ToEditor::applied(),
+                },
             };
-            if input.write_all(line(&answer).as_bytes()).and_then(|()| input.flush()).is_err() {
+            if !say(&answer) {
                 break;
             }
         }
@@ -471,7 +634,7 @@ mod tests {
         // nothing else, as before it could say otherwise.
         let bare = r#"{"object":{"name":"k","kind":"Key"},"sd":"","rights":[],"generic":{"read":0,"write":0,"execute":0,"all":0}}"#;
         let bare: Request = serde_json::from_str(bare).unwrap();
-        assert_eq!((bare.object.container, &bare.can), (false, &Can { dacl: true, owner: false, audit: false, label: false, why: None }));
+        assert_eq!((bare.object.container, &bare.can), (false, &Can { dacl: true, owner: false, audit: false, label: false, propagate: false, why: None }));
         assert!(!said.contains("children"), "a container of everything is the default, and goes unsaid");
         let key: Object = serde_json::from_str(r#"{"name":"sshd","kind":"Registry key","container":true,"children":"containers"}"#).unwrap();
         assert_eq!(key.children, Children::Containers);
@@ -485,9 +648,19 @@ mod tests {
 
     #[test]
     fn the_answers_are_as_the_protocol_says() {
-        let apply = FromEditor::Apply { sd: vec![0xff], parts: vec![Part::Owner, Part::Dacl] };
+        let apply = FromEditor::Apply { sd: vec![0xff], parts: vec![Part::Owner, Part::Dacl], propagate: false };
         assert_eq!(line(&apply), "{\"type\":\"apply\",\"sd\":\"/w==\",\"parts\":[\"owner\",\"dacl\"]}\n");
-        assert_eq!(line(&ToEditor::Applied), "{\"type\":\"applied\"}\n");
+        assert_eq!(line(&ToEditor::applied()), "{\"type\":\"applied\"}\n");
+        // What pushing into what is inside adds is said only when there is
+        // something to say, and an older answer still reads.
+        let pushed = FromEditor::Apply { sd: vec![0xff], parts: vec![Part::Dacl], propagate: true };
+        assert_eq!(line(&pushed), "{\"type\":\"apply\",\"sd\":\"/w==\",\"parts\":[\"dacl\"],\"propagate\":true}\n");
+        assert_eq!(line(&FromEditor::Stop), "{\"type\":\"stop\"}\n");
+        assert_eq!(line(&ToEditor::Progress { done: 12, at: "/srv/a".into() }), "{\"type\":\"progress\",\"done\":12,\"at\":\"/srv/a\"}\n");
+        let walked = ToEditor::Applied { done: 3, failed: vec![Failure { name: "/srv/b".into(), why: "no".into() }], stopped: true };
+        assert_eq!(line(&walked), "{\"type\":\"applied\",\"done\":3,\"failed\":[{\"name\":\"/srv/b\",\"why\":\"no\"}],\"stopped\":true}\n");
+        assert_eq!(serde_json::from_str::<ToEditor>("{\"type\":\"applied\"}").unwrap(), ToEditor::applied());
+        assert!(!line(&Can::default()).contains("propagate"));
         assert_eq!(line(&ToEditor::Failed { why: "no".into() }), "{\"type\":\"failed\",\"why\":\"no\"}\n");
         assert!(serde_json::from_str::<FromEditor>(r#"{"type":"apply","sd":"not base64!","parts":[]}"#).is_err());
     }
@@ -530,6 +703,48 @@ mod tests {
         let heard: Vec<&str> = heard.lines().collect();
         assert_eq!(serde_json::from_str::<Request>(heard[0]).unwrap(), request());
         assert_eq!(&heard[1..], ["{\"type\":\"applied\"}", "{\"type\":\"failed\",\"why\":\"you are not allowed to\"}"]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// An editor that asks for what it applies to be pushed inside, and
+    /// says stop while the walk goes on: the walk hears it, and the answer
+    /// says how far it got.
+    #[test]
+    fn a_stop_is_heard_while_the_walk_goes_on() {
+        let dir = std::env::temp_dir().join(format!("gxwi-sd-editor-stop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let editor = dir.join("editor.sh");
+        let heard = dir.join("heard");
+        std::fs::write(
+            &editor,
+            format!(
+                "#!/bin/sh\nread request\n\
+                 echo '{{\"type\":\"apply\",\"sd\":\"AQI=\",\"parts\":[\"dacl\"],\"propagate\":true}}'\n\
+                 sleep 0.3\necho '{{\"type\":\"stop\"}}'\n\
+                 while read answer; do echo \"$answer\" >> {heard}; case \"$answer\" in *applied*) exit 0;; esac; done\n",
+                heard = heard.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&editor, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let (tell, gone) = std::sync::mpsc::channel();
+        let walk: Walk = Box::new(|parts, stop, progress| {
+            assert_eq!(parts, [Part::Dacl]);
+            let mut walked = Walked::default();
+            while !stop.load(Ordering::Relaxed) && walked.done < 1000 {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                walked.done += 1;
+                progress(walked.done, "/srv/x");
+            }
+            walked.stopped = stop.load(Ordering::Relaxed);
+            walked
+        });
+        run(&editor, &request(), |_, _| Ok(()), Some(walk), move || tell.send(()).unwrap()).unwrap();
+        gone.recv_timeout(std::time::Duration::from_secs(10)).expect("done when the editor has gone");
+        let heard = std::fs::read_to_string(&heard).unwrap();
+        let last: ToEditor = serde_json::from_str(heard.lines().last().unwrap()).unwrap();
+        assert!(matches!(last, ToEditor::Applied { stopped: true, done, .. } if done > 0 && done < 1000), "{heard}");
+        assert!(heard.contains("\"type\":\"progress\""), "{heard}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

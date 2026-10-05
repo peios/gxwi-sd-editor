@@ -77,8 +77,15 @@ pub enum Place {
 }
 
 impl Editor {
+    /// What the object is, as a noun in a sentence: "folder", "registry
+    /// key". A program may say where it is in `kind` too ("Registry key
+    /// Machine\Software\X"), which is left off, with what leads up to it.
     pub fn kind_word(&self) -> String {
-        self.obj.kind.to_lowercase()
+        let mut words: Vec<&str> = self.obj.kind.split_whitespace().take_while(|w| !w.contains(['\\', '/'])).collect();
+        while words.len() > 1 && matches!(words.last(), Some(&("of" | "in" | "at" | "on"))) {
+            words.pop();
+        }
+        words.join(" ").to_lowercase()
     }
 
     pub fn from_word(&self) -> String {
@@ -150,7 +157,9 @@ impl Editor {
             },
         };
         let trouble = self.trouble.as_ref().map(|t| format!("<p class=\"trouble\" role=\"alert\">{}</p>", h(t))).unwrap_or_default();
-        let busy = self.sending != crate::Sending::No;
+        let trouble = format!("{trouble}{}", self.push_html());
+        // Applying, or asking whether to update what is inside first.
+        let busy = self.sending != crate::Sending::No || matches!(self.asking, Some(Asking::Push { .. }));
         let unchanged = self.changed().is_empty();
         let footer = if changeable {
             format!(
@@ -172,6 +181,56 @@ impl Editor {
             kind = h(&self.obj.kind),
             top = self.topbar(),
             status = h(&self.status),
+        )
+    }
+
+    /// Pushing into what is inside: whether to, how far it has got, and
+    /// how it went where not all of it was done.
+    fn push_html(&self) -> String {
+        let what = self.kind_word();
+        if let Some(Asking::Push { .. }) = self.asking {
+            return format!(
+                "<div class=\"inherit push\" role=\"group\" aria-labelledby=\"pushq\">{INFO}<div class=\"grow\"><p id=\"pushq\"><b>Update what's already inside this {w} too?</b> What this {w} passes down has changed. New items get the change on their own, but items already inside keep what they were given unless they're updated now. Items that don't inherit are left as they are.</p>\
+                 <div class=\"ask\"><button type=\"button\" class=\"primary\" fx-click=\"push\" fx-value-v=\"all\" fx-autofocus>Update Them Too</button><button type=\"button\" fx-click=\"push\" fx-value-v=\"here\">Only This {W}</button><button type=\"button\" fx-click=\"keep\">Cancel</button></div></div></div>",
+                w = h(&what),
+                W = h(&title_case(&what)),
+            );
+        }
+        if let Some(p) = &self.pushing {
+            let said = if p.stopping {
+                format!("<b>Stopping after the item in hand…</b> {} updated so far.", crate::items(p.done))
+            } else if p.done == 0 {
+                format!("<b>Applying, then updating what's inside this {}…</b>", h(&what))
+            } else {
+                format!("<b>Updating what's inside…</b> {} done<span class=\"at\">{}</span>", crate::items(p.done), h(&p.at))
+            };
+            return format!(
+                "<div class=\"inherit push\" role=\"status\">{INFO}<div class=\"grow\"><p>{said}</p><progress aria-label=\"Updating what's inside\"></progress></div><div class=\"links\"><button type=\"button\" fx-click=\"stop-push\"{}>Stop</button></div></div>",
+                if p.stopping { " disabled" } else { "" }
+            );
+        }
+        let Some(w) = &self.pushed else { return String::new() };
+        if w.failed.is_empty() && !w.stopped {
+            return String::new();
+        }
+        let mut said = if w.stopped {
+            format!("<b>Stopped after {}.</b> The rest still have what this {} passed down before.", crate::items(w.done), h(&what))
+        } else {
+            format!("<b>{} inside updated; {} couldn't be.</b>", crate::items(w.done), crate::items(w.failed.len() as u64))
+        };
+        if !w.failed.is_empty() {
+            const SHOWN: usize = 8;
+            let list: String = w.failed.iter().take(SHOWN).map(|f| format!("<li><span class=\"guid\">{}</span> — {}</li>", h(&f.name), h(&f.why))).collect();
+            let more = if w.failed.len() > SHOWN { format!("<li>and {} more</li>", w.failed.len() - SHOWN) } else { String::new() };
+            if w.stopped {
+                said.push_str(&format!(" {} couldn't be:", crate::items(w.failed.len() as u64)));
+            }
+            said.push_str(&format!("</p><ul class=\"failed\">{list}{more}</ul><p>"));
+        }
+        banner(
+            true,
+            &said,
+            &format!("{}{}", link("push-again", &[], if w.stopped { "Update the Rest" } else { "Try Again" }), link("push-done", &[], "Dismiss")),
         )
     }
 

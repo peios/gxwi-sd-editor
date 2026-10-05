@@ -64,7 +64,7 @@ pub fn editor(text: &str, can: Can) -> Editor {
 }
 
 pub fn all() -> Can {
-    Can { dacl: true, owner: true, audit: true, label: true, why: None }
+    Can { dacl: true, owner: true, audit: true, label: true, propagate: true, why: None }
 }
 
 pub fn shown(e: &Editor) -> String {
@@ -389,8 +389,45 @@ fn auditing_rules_are_made_and_ticked() {
 }
 
 #[test]
+fn changing_what_is_passed_down_asks_whether_to_update_what_is_inside() {
+    let mut e = editor(&format!("O:{o}G:{o}D:(A;OICI;0x1301bf;;;{f})(A;;FA;;;{o})", o = sid(1001), f = sid(1105)), all());
+    // A rule for the folder alone passes nothing down: no question.
+    press(&mut e, "pick", json!({ "sid": sid(1001) }));
+    press(&mut e, "tick", json!({ "mask": "2032127", "way": "allow" }));
+    press(&mut e, "tick", json!({ "mask": "1179785", "way": "deny" }));
+    assert!(!e.passes_changed(&e.changed()));
+    // One that passes down does.
+    let mut e = editor(&format!("O:{o}G:{o}D:(A;OICI;0x1301bf;;;{f})", o = sid(1001), f = sid(1105)), all());
+    press(&mut e, "pick", json!({ "sid": sid(1105) }));
+    press(&mut e, "tick", json!({ "mask": "2032127", "way": "allow" }));
+    press(&mut e, "ok", json!({}));
+    assert_eq!(e.asking, Some(Asking::Push { then_close: true }));
+    let html = shown(&e);
+    assert!(html.contains("Update what&#39;s already inside this folder too?") || html.contains("Update what's already inside this folder too?"), "{html}");
+    press(&mut e, "push", json!({ "v": "all" }));
+    assert_eq!(e.pushing, Some(Pushing::default()));
+    assert_eq!(e.push_parts, [Part::Dacl]);
+    // How far it has got, and how it went.
+    assert!(!e.answered(ToEditor::Progress { done: 1204, at: "/srv/finance/q3".into() }));
+    assert!(shown(&e).contains("1,204 items done"));
+    let failed = vec![gxwi_sd_editor::Failure { name: "/srv/finance/locked".into(), why: "permission denied".into() }];
+    assert!(!e.answered(ToEditor::Applied { done: 1210, failed, stopped: false }), "it stays open to say what could not be done");
+    let html = shown(&e);
+    assert!(html.contains("1,210 items inside updated; 1 item couldn") && html.contains("/srv/finance/locked") && html.contains("Try Again"), "{html}");
+    assert!(e.changed().is_empty());
+    // Only this folder: sent without pushing, and closed on OK.
+    let mut e = editor(&format!("O:{o}G:{o}D:(A;OICI;0x1301bf;;;{f})", o = sid(1001), f = sid(1105)), all());
+    press(&mut e, "pick", json!({ "sid": sid(1105) }));
+    press(&mut e, "tick", json!({ "mask": "2032127", "way": "allow" }));
+    press(&mut e, "ok", json!({}));
+    press(&mut e, "push", json!({ "v": "here" }));
+    assert!(e.pushing.is_none());
+    assert!(e.answered(ToEditor::applied()));
+}
+
+#[test]
 fn a_program_that_can_change_nothing_gets_only_close() {
-    let mut e = editor("O:SYG:SYD:(A;OICI;FA;;;SY)", Can { dacl: false, owner: false, audit: false, label: false, why: Some("You may not change it here.".into()) });
+    let mut e = editor("O:SYG:SYD:(A;OICI;FA;;;SY)", Can { dacl: false, owner: false, audit: false, label: false, propagate: false, why: Some("You may not change it here.".into()) });
     let html = shown(&e);
     assert!(html.contains("You may not change it here.") && html.contains(">Close</button>") && !html.contains(">Apply<"), "{html}");
     press(&mut e, "tick", json!({ "mask": "1179785", "way": "deny" }));
