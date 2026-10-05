@@ -176,6 +176,9 @@ button.ownerbtn { display: flex; align-items: center; gap: 8px; height: 34px; pa
 .inherit + .inherit { margin-top: -4px; }
 /* Pushing into what is inside: the question, how far it has got, and what
    could not be done. */
+footer { flex-wrap: wrap; }
+footer > .inherit { flex-basis: 100%; box-sizing: border-box; }
+footer > .inherit ul.failed { max-height: 8rem; overflow-y: auto; }
 .inherit.push progress { display: block; width: 100%; height: 4px; margin-top: 6px; accent-color: var(--accent-solid); }
 .inherit .at { display: block; margin-top: 2px; color: var(--text-muted); font-family: var(--font-mono, monospace); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inherit ul.failed { margin: 4px 0; padding-left: 1.2em; display: grid; gap: 2px; }

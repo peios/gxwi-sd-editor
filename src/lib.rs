@@ -501,7 +501,9 @@ fn run(
                 Ok(()) => match (&mut walk, propagate) {
                     (Some(walk), true) => {
                         stop.store(false, Ordering::Relaxed);
-                        let mut last = std::time::Instant::now();
+                        // The first item is told at once, so the walk is seen
+                        // to start, and then no more often than PROGRESS_EVERY.
+                        let mut last = std::time::Instant::now().checked_sub(PROGRESS_EVERY).unwrap_or_else(std::time::Instant::now);
                         let mut gone = false;
                         let walked = walk(&parts, &stop, &mut |done, at| {
                             if !gone && last.elapsed() >= PROGRESS_EVERY {

@@ -157,7 +157,9 @@ impl Editor {
             },
         };
         let trouble = self.trouble.as_ref().map(|t| format!("<p class=\"trouble\" role=\"alert\">{}</p>", h(t))).unwrap_or_default();
-        let trouble = format!("{trouble}{}", self.push_html());
+        // Pushing into what is inside is asked about, followed and reported
+        // in the footer, which stays in sight however far down the page is.
+        let push = self.push_html();
         // Applying, or asking whether to update what is inside first.
         let busy = self.sending != crate::Sending::No || matches!(self.asking, Some(Asking::Push { .. }));
         let unchanged = self.changed().is_empty();
@@ -175,7 +177,7 @@ impl Editor {
              <div class=\"fit\" fx-fit><div class=\"editor\">\
              <header class=\"head\"><div class=\"grow\"><h1>{name}</h1><p>{kind}</p></div>{change}{owning}</header>\
              {top}{body}{trouble}\
-             <footer><span class=\"status\" role=\"status\">{status}</span>{footer}</footer></div></div>",
+             <footer>{push}<span class=\"status\" role=\"status\">{status}</span>{footer}</footer></div></div>",
             keys = adv::keys(self),
             name = h(&self.obj.name),
             kind = h(&self.obj.kind),
