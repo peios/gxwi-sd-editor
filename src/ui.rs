@@ -584,11 +584,14 @@ impl Editor {
             got.push(format!("access for {}", if n == 1 { "1 user or group".into() } else { format!("{n} users and groups") }));
         }
         got.extend(sacl_bits);
+        // Protection is worth a word only where there is a parent to take
+        // from: an eventd pattern is protected, and is in nothing.
         let mut off = Vec::new();
-        if access && protected {
+        let parent = self.obj.from.is_some();
+        if access && protected && parent {
             off.push("access".to_string());
         }
-        if self.shows_sacl() && sprotected {
+        if self.shows_sacl() && sprotected && parent {
             off.push("auditing & labels".to_string());
         }
         if got.is_empty() && off.is_empty() {
@@ -1064,8 +1067,12 @@ impl Editor {
             .iter()
             .map(|g| {
                 let def = self.obj.part(g);
-                let name = def.map_or_else(|| "Unknown Part".to_string(), |d| d.name.clone());
+                // A part named by its name can't be named again from its
+                // GUID, which is a hash of it.
+                let noun = self.obj.naming.as_ref().map(|n| n.noun.as_str());
+                let name = def.map_or_else(|| noun.map_or_else(|| "Unknown Part".to_string(), |n| format!("Another {n}")), |d| d.name.clone());
                 let title = match def {
+                    None if noun.is_some() => format!("A {} named by name, which can't be told from its GUID ({}). It's kept as it is.", noun.unwrap_or_default(), guid_text(g)),
                     None => format!("A part the program that opened this doesn't name ({}). It's kept as it is.", guid_text(g)),
                     Some(d) if d.kind == PartKind::Set => {
                         let covers: Vec<String> = self.obj.parts.iter().filter(|x| x.set == Some(d.guid)).map(|x| x.name.clone()).collect();
@@ -1099,7 +1106,7 @@ impl Editor {
                 let such = n.example.as_ref().map(|x| format!(", such as {x}")).unwrap_or_default();
                 format!(
                     "<span class=\"named\">{}<button type=\"button\" class=\"small\" fx-click=\"{p}-named\" fx-value-r=\"{key}\">Add {}</button></span>{}",
-                    self.text_field(&field, "", &format!(" class=\"addpart\" placeholder=\"Another {}{}\" aria-label=\"Another {} by name\"", h(&n.noun), h(&such), h(&n.noun))),
+                    self.text_field(&field, "", &format!(" placeholder=\"Another {}{}\" aria-label=\"Another {} by name\"", h(&n.noun), h(&such), h(&n.noun))),
                     h(&title_case(&n.noun)),
                     self.wrong.get(&field).map(|w| format!("<span class=\"wrong\">{}</span>", h(w))).unwrap_or_default()
                 )

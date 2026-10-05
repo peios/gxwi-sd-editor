@@ -91,7 +91,7 @@ button.small { height: 26px; align-self: flex-start; font-size: 12px; padding: 0
 button.icon { width: 26px; height: 26px; padding: 0; border: 0; background: none; color: var(--text-muted); font-size: 16px; }
 .rule button.remove-rule { align-self: flex-end; color: var(--danger-text); }
 
-select, .cond input, .naming input, .fld input:not([type="checkbox"]) {
+select, .cond input, .naming input, .named input, .fld input:not([type="checkbox"]) {
     height: 28px;
     min-width: 0;
     padding: 0 6px;
@@ -103,7 +103,11 @@ select, .cond input, .naming input, .fld input:not([type="checkbox"]) {
     border-radius: 6px;
     box-sizing: border-box;
 }
-input[aria-invalid="true"] { border-color: var(--danger-text); }
+input[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--danger-text); }
+/* A part named by typing: the name, then its button, on a line of their
+   own under the chips when the line is short. */
+.named { display: flex; gap: 6px; align-items: center; flex: 1 1 18rem; min-width: 0; }
+.named input { flex: 1; }
 input:disabled, select:disabled { opacity: .6; cursor: default; }
 input[type="checkbox"] { accent-color: var(--accent-solid); margin: 0; }
 .chk { display: inline-flex; align-items: center; gap: 6px; }
@@ -327,7 +331,7 @@ button.xrow[aria-selected="true"] { background: var(--surface-2); border-color: 
 pre.sddl { margin: 0; padding: var(--space-3); border-radius: var(--radius-sm); background: var(--bg-sunken); border: 1px solid var(--border-default); overflow-x: auto; font: 500 11.5px/1.7 var(--font-mono); font-variant-ligatures: none; color: var(--text-secondary); white-space: pre; }
 /* Edited, the text keeps the layout it was read in: one entry a line,
    scrolled across rather than wrapped, so an entry reads as one. */
-textarea.sddl { box-sizing: border-box; width: 100%; padding: var(--space-3); resize: vertical; font: 500 11.5px/1.7 var(--font-mono); font-variant-ligatures: none; white-space: pre; overflow-x: auto; }
+textarea.sddl { box-sizing: border-box; width: 100%; padding: var(--space-3); resize: vertical; font: 500 11.5px/1.7 var(--font-mono); font-variant-ligatures: none; white-space: pre; overflow-x: auto; color: var(--text-primary); background: var(--bg-sunken); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); }
 .fld .row { display: flex; flex-wrap: wrap; gap: 6px; }
 
 .note, .none { margin: 0; color: var(--text-muted); font-size: 12px; }
