@@ -341,6 +341,19 @@ fn the_descriptor_is_edited_as_text_within_what_the_program_can_change() {
     press(&mut e, "x-text-use", json!({}));
     assert_eq!(e.wrong.get("x.sddl").map(String::as_str), Some("The text changes the SACL, which can't be changed here."));
     assert!(e.changed().is_empty());
+    // Where only the label can change, the label can, and nothing else.
+    let mut e = editor(&finance(), Can { audit: false, label: true, ..all() });
+    type_in(&mut e, "advmode", "on");
+    press(&mut e, "x-text", json!({}));
+    let text = e.adv.as_ref().unwrap().text.clone().unwrap();
+    let with_label = text.replace("S:\n", "S:\n  (ML;;NW;;;ME)\n");
+    type_in(&mut e, "x.sddl", &with_label.replace("(AU;OICIFA;", "(AU;OICISAFA;"));
+    press(&mut e, "x-text-use", json!({}));
+    assert_eq!(e.wrong.get("x.sddl").map(String::as_str), Some("The text changes the SACL beyond its integrity label, and only the label can be changed here."));
+    type_in(&mut e, "x.sddl", &with_label);
+    press(&mut e, "x-text-use", json!({}));
+    assert!(e.wrong.get("x.sddl").is_none(), "{:?}", e.wrong);
+    assert_eq!(e.changed(), [Part::Label]);
 }
 
 #[test]

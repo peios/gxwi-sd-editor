@@ -593,7 +593,7 @@ pub fn desc(e: &Editor) -> String {
             format!(
                 "<textarea class=\"sddl\" {} rows=\"{rows}\" spellcheck=\"false\" autocomplete=\"off\"{}>{}</textarea>{wrong}\
                  <span class=\"hint\">Entries you leave as they are go back exactly as they came. A comment marked # stands for an entry SDDL can't say: leave it where it should be, or take it out to remove the entry.</span>\
-                 <div class=\"row\"><button type=\"button\" class=\"small primary\" fx-click=\"x-text-use\" fx-key=\"Ctrl+Enter\">Use This Text</button><button type=\"button\" class=\"small\" fx-click=\"x-text-cancel\">Cancel</button></div>",
+                 <div class=\"row\"><button type=\"button\" class=\"small primary\" fx-click=\"x-text-use\">Use This Text</button><button type=\"button\" class=\"small\" fx-click=\"x-text-cancel\">Cancel</button></div>",
                 e.field("x.sddl", draft),
                 if wrong.is_empty() { "" } else { " aria-invalid=\"true\"" },
                 h(draft)
