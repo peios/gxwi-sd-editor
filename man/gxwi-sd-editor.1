@@ -39,15 +39,52 @@ given only to whom KACS allows: the person themselves, a group they may own
 things as, or anyone with SeRestorePrivilege. Who the person is comes from the
 editor's own token, which is the program's.
 .PP
-The claims conditions have tested are remembered in the machine's registry, at
-Machine\\Software\\Peios\\Permissions Editor, for suggesting next time, by
-whoever may write that key.
+Where a claim or a value is typed, the editor suggests the claims the machine
+defines first, then those rules applied here have used, most used first. Both
+are kept in the registry, as described under CLAIM CATALOGUE.
 .PP
 The editor ends when the dialog is closed or cancelled, and after OK once the
 program has applied what it sent. It ends as well when its standard input
 closes, and when the program that started it does.
 .PP
 Started by hand, with no request on its standard input, it says so and ends.
+.SH CLAIM CATALOGUE
+The machine's claims are kept at
+.B Machine\eCommon\eSecurityDescriptorBuilder
+for any program that builds security descriptors. Common holds formats that
+are stable but not part of the Peios specifications. The key comes with the
+editor's package, and the descriptor it takes from the machine hive lets
+Administrators and SYSTEM change it and anyone signed in read it. The editor
+never makes it: where it is missing, there are no suggestions.
+.TP
+.B KnownClaims\e\fISource\fB.\fIName\fR
+One key a claim the machine defines, named as conditions name it:
+.I Source
+is User, Device, Resource or Local, as in User.Department or
+Resource.Classification. Administrators add them. Each key may hold:
+.RS
+.TP
+.B Type
+(REG_SZ) The claim's kind as SDDL writes it: TS text, TI number, TU number
+0 or more, TB yes or no, TD users or groups, TX bytes. A resource claim named
+in the Claims tab is made this kind.
+.TP
+.B Values
+(REG_MULTI_SZ) The values it takes, most likely first, suggested in that order.
+.TP
+.B Description
+(REG_SZ) What it is for, shown beside its name.
+.RE
+.TP
+.B UsedClaims
+(REG_MULTI_SZ, a value of the key itself) The claims applied rules have used,
+one a string: the claim as
+.IR Source . Name ,
+how many times it has been used, then each value it was used with as
+.IR value = count ,
+separated by tabs. A program counts a claim when a rule testing it is applied,
+so a typo is never counted. Only a program that may write the key counts, so
+the counts are of what Administrators have applied.
 .SH SEE ALSO
 The protocol is set out in the Peios userspace protocols (PSPU), on
 learn.peios.org.

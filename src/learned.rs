@@ -2,19 +2,20 @@
 //! tested for, most used first: suggestions for the next rule.
 //!
 //! They are the machine's, as claims are, so they live in its registry, at
-//! `Machine\Software\Peios\Permissions Editor`, value `Claims`. They are
-//! learnt when rules are applied, from what was applied only, so a typo is
-//! never learnt. Whoever may read the key is offered them, and only whoever
-//! may write it teaches it: the key's descriptor, inherited from where it
-//! is made, says who those are.
+//! `Machine\Common\SecurityDescriptorBuilder`, value `UsedClaims`, where
+//! any program that builds descriptors may share them. They are learnt when
+//! rules are applied, from what was applied only, so a typo is never
+//! learnt. Whoever may read the key is offered them, and only whoever may
+//! write it teaches them (Administrators and SYSTEM, as the machine hive's
+//! descriptor passes down). The key is made by the package that ships it,
+//! never here.
 
 use std::collections::BTreeMap;
 
-use peios::registry::{CreateFlags, Key, KeyAccess, OpenFlags, ValueType};
+use peios::registry::{Key, KeyAccess, OpenFlags, ValueType};
 
-const PARENT: &str = "Machine\\Software\\Peios";
-const CHILD: &str = "Permissions Editor";
-const NAME: &str = "Claims";
+pub const KEY: &str = "Machine\\Common\\SecurityDescriptorBuilder";
+const NAME: &str = "UsedClaims";
 
 /// One claim, as `Source.Name`: how often it was used, and each value.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -24,17 +25,21 @@ pub struct Use {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Learned(pub BTreeMap<String, Use>);
+pub struct Learned {
+    pub used: BTreeMap<String, Use>,
+    /// Whether this program may teach it, and so forget it.
+    pub writable: bool,
+}
 
 impl Learned {
     /// What the machine has learnt, or nothing where it cannot be read.
     pub fn read() -> Learned {
-        let path = format!("{PARENT}\\{CHILD}");
-        let Ok(value) = Key::open(None, &path, KeyAccess::QUERY_VALUE, OpenFlags::empty()).and_then(|key| key.query_value(NAME.as_bytes(), None)) else { return Learned::default() };
+        let writable = Key::open(None, KEY, KeyAccess::SET_VALUE, OpenFlags::empty()).is_ok();
+        let Ok(value) = Key::open(None, KEY, KeyAccess::QUERY_VALUE, OpenFlags::empty()).and_then(|key| key.query_value(NAME.as_bytes(), None)) else { return Learned { writable, ..Learned::default() } };
         if value.ty != ValueType::MULTI_SZ {
-            return Learned::default();
+            return Learned { writable, ..Learned::default() };
         }
-        Learned::parse(&String::from_utf8_lossy(&value.data))
+        Learned { writable, ..Learned::parse(&String::from_utf8_lossy(&value.data)) }
     }
 
     /// One claim a line: its name, how often, then each value and how
@@ -47,11 +52,11 @@ impl Learned {
             let values = fields.filter_map(|f| f.rsplit_once('=')).filter_map(|(v, n)| Some((v.to_string(), n.parse().ok()?))).collect();
             out.insert(name.to_string(), Use { times, values });
         }
-        Learned(out)
+        Learned { used: out, writable: false }
     }
 
     fn lines(&self) -> Vec<String> {
-        self.0
+        self.used
             .iter()
             .map(|(name, u)| {
                 let mut line = format!("{name}\t{}", u.times);
@@ -69,7 +74,7 @@ impl Learned {
         if name.is_empty() || name.contains(['\t', '\0']) {
             return;
         }
-        let u = self.0.entry(name.to_string()).or_default();
+        let u = self.used.entry(name.to_string()).or_default();
         u.times += 1;
         for v in values.iter().filter(|v| !v.contains(['\t', '\0', '='])) {
             *u.values.entry(v.clone()).or_default() += 1;
@@ -79,23 +84,22 @@ impl Learned {
     /// The claim names used from `source`, most used first.
     pub fn names(&self, source: &str) -> Vec<(String, u32)> {
         let prefix = format!("{source}.");
-        let mut out: Vec<(String, u32)> = self.0.iter().filter_map(|(k, u)| Some((k.strip_prefix(&prefix)?.to_string(), u.times))).collect();
+        let mut out: Vec<(String, u32)> = self.used.iter().filter_map(|(k, u)| Some((k.strip_prefix(&prefix)?.to_string(), u.times))).collect();
         out.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         out
     }
 
     /// The values a claim was tested for, most used first.
     pub fn values(&self, claim: &str) -> Vec<(String, u32)> {
-        let mut out: Vec<(String, u32)> = self.0.get(claim.trim()).map(|u| u.values.iter().map(|(v, n)| (v.clone(), *n)).collect()).unwrap_or_default();
+        let mut out: Vec<(String, u32)> = self.used.get(claim.trim()).map(|u| u.values.iter().map(|(v, n)| (v.clone(), *n)).collect()).unwrap_or_default();
         out.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         out
     }
 
-    /// Saves what has been learnt, making the key the first time. Why not,
-    /// which is nothing the person needs to hear: suggestions are a help.
+    /// Saves what has been learnt. Why not, which is nothing the person
+    /// needs to hear: suggestions are a help.
     pub fn write(&self) -> Result<(), String> {
-        let (parent, _) = Key::create(None, PARENT, KeyAccess::CREATE_SUB_KEY, CreateFlags::empty(), None, None).map_err(|e| e.to_string())?;
-        let (own, _) = Key::create(Some(&parent), CHILD, KeyAccess::SET_VALUE, CreateFlags::empty(), None, None).map_err(|e| e.to_string())?;
+        let own = Key::open(None, KEY, KeyAccess::SET_VALUE, OpenFlags::empty()).map_err(|e| e.to_string())?;
         let mut bytes = Vec::new();
         for line in self.lines() {
             bytes.extend_from_slice(line.as_bytes());
@@ -107,7 +111,7 @@ impl Learned {
 
     /// Forgets everything learnt.
     pub fn forget(&mut self) -> Result<(), String> {
-        self.0.clear();
+        self.used.clear();
         self.write()
     }
 }

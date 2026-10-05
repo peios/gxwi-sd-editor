@@ -29,6 +29,7 @@ mod claim;
 mod cond;
 mod edit;
 mod eff;
+mod known;
 mod learned;
 mod people;
 mod sd;
@@ -39,6 +40,7 @@ mod view;
 use caller::Caller;
 use cond::{Cond, Node};
 use edit::CondOf;
+use known::Known;
 use learned::Learned;
 use sd::{Acl, Ace, Descriptor, Found, Guid, Ids, Way};
 use view::{Obj, PartDef, Simple};
@@ -121,6 +123,8 @@ pub struct Editor {
     pub caller: Caller,
     pub names: Names,
     pub learned: Learned,
+    /// The claims the machine defines.
+    pub known: Known,
     /// The descriptor as it is being edited, what each entry was read as,
     /// and the ids for new ones.
     pub sd: Descriptor,
@@ -226,6 +230,7 @@ impl Editor {
             caller,
             names,
             learned,
+            known: Known::default(),
             applied: sd.clone(),
             sd,
             found,
@@ -523,14 +528,18 @@ impl Editor {
         };
         let before = tested(&self.applied);
         let new: Vec<_> = tested(&self.sd).into_iter().filter(|t| !before.contains(t)).collect();
-        if new.is_empty() {
+        // Only whoever may write the machine's key teaches it.
+        if new.is_empty() || !self.learned.writable {
             return;
         }
+        // Counted onto what is there now, which another program may have
+        // added to since this one opened.
+        let mut now = Learned::read();
         for (name, values) in &new {
-            self.learned.learn(name, values);
+            now.learn(name, values);
         }
-        // Only whoever may write the machine's key teaches it.
-        let _ = self.learned.write();
+        let _ = now.write();
+        self.learned = now;
     }
 
     fn close(&self) {
@@ -665,7 +674,8 @@ fn main() {
     }
     let request = request().unwrap_or_else(|why| die(&why));
     let title = format!("Permissions for {}", request.object.name);
-    let editor = Editor::new(request, Names::new(), Caller::own(), Learned::read()).unwrap_or_else(|why| die(&why));
+    let mut editor = Editor::new(request, Names::new(), Caller::own(), Learned::read()).unwrap_or_else(|why| die(&why));
+    editor.known = Known::read();
     let mut app = App::connect().unwrap_or_else(|e| die(&format!("no desktop to open on: {e}")));
     app.stylesheet("/editor.css", include_str!("editor.css"));
     let dialog = app.dialog(&title, editor);

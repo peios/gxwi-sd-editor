@@ -778,9 +778,9 @@ impl Editor {
             .collect();
         let none = if cards.is_empty() { wrapped_note(&format!("{} has no rules that depend on a condition.", self.name(sid))) } else { String::new() };
         let add = if ro { String::new() } else { "<button type=\"button\" fx-click=\"c-new\">+ Add a Conditional Rule</button>".into() };
-        let forget = if !self.learned.0.is_empty() && self.can.owner { " <button type=\"button\" class=\"link small\" fx-click=\"forget\">Forget What's Been Used</button>" } else { "" };
+        let forget = if !self.learned.used.is_empty() && self.learned.writable { " <button type=\"button\" class=\"link small\" fx-click=\"forget\">Forget What's Been Used</button>" } else { "" };
         format!(
-            "{none}{cards}{add}{}<p class=\"note\">Suggestions are the claims used in rules applied on this machine, most used first.{forget}</p>",
+            "{none}{cards}{add}{}<p class=\"note\">Suggestions are the claims this machine defines, then those used in rules applied here, most used first.{forget}</p>",
             wrapped_note(&format!("A conditional rule applies only while its condition holds. Conditions test claims (the person's, their device's, this {}'s, or the program's) and group membership, and combine them in groups.", self.kind_word()))
         )
     }
@@ -934,12 +934,28 @@ impl Editor {
         )
     }
 
+    /// The claims of `src` the machine defines, then those used before, most
+    /// used first.
     fn name_suggestions(&self, src: Src) -> Vec<(String, String)> {
-        self.learned.names(src.word()).into_iter().map(|(n, t)| (n, times(t))).collect()
+        let used = self.learned.names(src.word());
+        let count = |n: &str| used.iter().find(|(u, _)| u == n).map_or(0, |(_, t)| *t);
+        let mut defined = self.known.names(src.word());
+        defined.sort_by(|a, b| count(&b.0).cmp(&count(&a.0)).then(a.0.cmp(&b.0)));
+        let mut out: Vec<(String, String)> = defined.iter().map(|(n, d)| (n.clone(), defined_label(&d.description, count(n)))).collect();
+        let rest: Vec<(String, String)> = used.into_iter().filter(|(n, _)| !out.iter().any(|(o, _)| o == n)).map(|(n, t)| (n, times(t))).collect();
+        out.extend(rest);
+        out
     }
 
+    /// The values the machine defines for `claim`, in its order, then those
+    /// used before.
     fn value_suggestions(&self, claim: &str) -> Vec<(String, String)> {
-        self.learned.values(claim).into_iter().map(|(v, t)| (v, times(t))).collect()
+        let used = self.learned.values(claim);
+        let count = |v: &str| used.iter().find(|(u, _)| u == v).map_or(0, |(_, t)| *t);
+        let mut out: Vec<(String, String)> = self.known.get(claim).map(|d| d.values.iter().map(|v| (v.clone(), defined_label("", count(v)))).collect()).unwrap_or_default();
+        let rest: Vec<(String, String)> = used.into_iter().filter(|(v, _)| !out.iter().any(|(o, _)| o == v)).map(|(v, t)| (v, times(t))).collect();
+        out.extend(rest);
+        out
     }
 
     // ---- rules for parts
@@ -1442,6 +1458,19 @@ fn adv_toggle(event: &str, key: u32, advanced: bool, fits: bool, what: &str) -> 
 
 fn times(n: u32) -> String {
     if n == 1 { "Used once".into() } else { format!("Used {n} times") }
+}
+
+/// A suggestion the machine defines: what it is for, if it says, and how
+/// often it has been used.
+fn defined_label(description: &str, used: u32) -> String {
+    let mut out = "Defined on this machine".to_string();
+    if !description.trim().is_empty() {
+        out = format!("{out}: {}", description.trim());
+    }
+    if used > 0 {
+        out = format!("{out} · {}", times(used).to_lowercase());
+    }
+    out
 }
 
 pub fn title_case(s: &str) -> String {
@@ -2027,6 +2056,8 @@ pub fn input(e: &mut Editor, name: &str, value: &str, _fields: &mut Fields) {
                 .map(|v| v.to_string())
                 .collect();
             let kind_now = e.simple().claims.iter().find(|c| c.id == k).map(|c| c.claim.kind);
+            // A claim the machine defines comes as the kind it says.
+            let defined_kind = if *what == "name" { e.known.get(&format!("Resource.{}", value.trim())).and_then(|d| d.kind) } else { None };
             let resolved: Vec<String> = if kind_now == Some(ClaimType::Sid) { resolved.iter().map(|v| e.names.find(v).map_or_else(|_| v.clone(), |s| s.to_string())).collect() } else { resolved };
             e.edit(|s, _, _, _| {
                 let Some(c) = s.claims.iter_mut().find(|c| c.id == k) else { return };
@@ -2035,7 +2066,17 @@ pub fn input(e: &mut Editor, name: &str, value: &str, _fields: &mut Fields) {
                 }
                 let bit = |f: &mut u32, b: u32| if on { *f |= b } else { *f &= !b };
                 match *what {
-                    "name" => c.claim.name = value.to_string(),
+                    "name" => {
+                        c.claim.name = value.to_string();
+                        if let Some(t) = defined_kind
+                            && c.claim.values.is_empty()
+                        {
+                            c.claim.kind = t;
+                            if t != ClaimType::Text {
+                                c.claim.flags &= !claim::CASE_SENSITIVE;
+                            }
+                        }
+                    }
                     "kind" => {
                         if let Some(t) = ClaimType::from_key(value) {
                             c.claim.kind = t;

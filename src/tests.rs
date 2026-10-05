@@ -312,6 +312,34 @@ fn claims_are_added_in_the_claims_tab() {
 }
 
 #[test]
+fn claims_the_machine_defines_are_suggested_before_those_used() {
+    let mut e = editor(&finance(), all());
+    e.known.0.insert("User.Clearance".into(), known::Defined { kind: Some(claim::ClaimType::UInt), values: vec!["3".into(), "2".into()], description: "How secret they may see".into() });
+    e.known.0.insert("Resource.Budget".into(), known::Defined { kind: Some(claim::ClaimType::UInt), ..Default::default() });
+    e.learned.learn("User.Department", &["Finance".into()]);
+    e.learned.learn("User.Clearance", &["2".into()]);
+    press(&mut e, "pick", json!({ "sid": sid(1105) }));
+    press(&mut e, "tab", json!({ "v": "cond" }));
+    press(&mut e, "c-new", json!({}));
+    let html = shown(&e);
+    let clearance = html.find("<option value=\"Clearance\" label=\"Defined on this machine: How secret they may see · used once\">").expect("Clearance is defined");
+    let department = html.find("<option value=\"Department\" label=\"Used once\">").expect("Department was used");
+    assert!(clearance < department, "{html}");
+    let card = e.simple().cards(&sid(1105).parse().unwrap())[0].key;
+    type_in(&mut e, &format!("c.d{card}.0.name"), "Clearance");
+    let html = shown(&e);
+    let three = html.find("<option value=\"3\" label=\"Defined on this machine\">").expect("3 is defined");
+    let two = html.find("<option value=\"2\" label=\"Defined on this machine · used once\">").expect("2 is defined and used");
+    assert!(three < two, "the machine's order: {html}");
+    // A resource claim it defines is made as the kind it says.
+    press(&mut e, "top", json!({ "v": "claims" }));
+    press(&mut e, "cl-new", json!({}));
+    let id = e.simple().claims.last().unwrap().id;
+    type_in(&mut e, &format!("cl.{id}.name"), "Budget");
+    assert_eq!(e.simple().claims.last().unwrap().claim.kind, claim::ClaimType::UInt);
+}
+
+#[test]
 fn stopping_inheritance_keeps_or_removes_and_protects() {
     let mut e = editor(&finance(), all());
     press(&mut e, "inherit-stop", json!({ "v": "access" }));

@@ -71,6 +71,10 @@ impl ClaimType {
             ClaimType::Bytes => "TX",
         }
     }
+
+    pub fn from_sddl(code: &str) -> Option<ClaimType> {
+        ClaimType::ALL.into_iter().find(|t| t.sddl().eq_ignore_ascii_case(code))
+    }
 }
 
 // A claim's flags.
