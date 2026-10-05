@@ -28,10 +28,17 @@ owner, primary group, integrity label and process trust label are in the
 dropdown under the owner's name.
 .PP
 Advanced Mode shows the access list and the SACL entry by entry, as KACS reads
-them, and changes, moves, duplicates and removes entries; and the descriptor's
-owner, group, control flags and SDDL. An entry the other tabs cannot show is
-kept where it was found, and shown here. An entry nobody changed goes back to
-the program exactly as it came.
+them, and changes, moves (with the buttons, Alt+Up and Alt+Down, or by dragging),
+duplicates and removes entries; and the descriptor's owner, group, control flags
+and SDDL. An entry the other tabs cannot show is kept where it was found, and
+shown here. An entry nobody changed goes back to the program exactly as it came.
+.PP
+The whole descriptor can be edited as SDDL text, which libpeios reads. An entry
+left as it was in the text is the one it was, and goes back as it came. An entry
+of a type SDDL has no code for is a comment such as
+.B /* #1 kept as found: type 0x16, 12 bytes */
+: left in, the entry stays where the comment is; taken out, the entry goes. The
+text can change only the parts the program can.
 .PP
 What the program cannot change is shown and not offered, and the dialog says
 why; where it can change nothing, Close is the only button. The owner can be

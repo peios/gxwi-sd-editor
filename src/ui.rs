@@ -1463,7 +1463,7 @@ impl Editor {
                 self.top = Top::Claims;
             }
             Place::Entry(list, id) => {
-                let adv = self.adv.get_or_insert(Adv { tab: AdvTab::Dacl, dacl: None, sacl: None, more: false, stash: None });
+                let adv = self.adv.get_or_insert(Adv { tab: AdvTab::Dacl, dacl: None, sacl: None, more: false, stash: None, text: None });
                 match list {
                     List::Dacl => {
                         adv.tab = AdvTab::Dacl;
@@ -1476,7 +1476,7 @@ impl Editor {
                 }
             }
             Place::Descriptor => {
-                let adv = self.adv.get_or_insert(Adv { tab: AdvTab::Desc, dacl: None, sacl: None, more: false, stash: None });
+                let adv = self.adv.get_or_insert(Adv { tab: AdvTab::Desc, dacl: None, sacl: None, more: false, stash: None, text: None });
                 adv.tab = AdvTab::Desc;
             }
         }

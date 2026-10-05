@@ -83,7 +83,7 @@ pub fn type_in(e: &mut Editor, name: &str, value: &str) {
 }
 
 /// The descriptor as the editor writes SDDL, on one line. libpeios'
-/// formatter leaves out what it has no code for, as alarm entries.
+/// formatter refuses a whole descriptor holding a type it has no code for.
 pub fn sddl_of(e: &Editor) -> String {
     e.sd.build(&e.found).expect("it can be written");
     text::sd_text(&e.sd).replace("\n  ", "").replace('\n', "")
@@ -245,6 +245,62 @@ fn only_the_misplaced_rule_for_a_part_is_kept_and_moving_it_frees_it() {
     type_in(&mut e, "advmode", "");
     assert_eq!(e.simple().parts.len(), 2);
     assert!(e.simple().entries().iter().all(|x| x.kept.is_none()));
+}
+
+#[test]
+fn an_entry_dragged_is_where_it_was_dropped() {
+    let mut e = editor(&finance(), all());
+    type_in(&mut e, "advmode", "on");
+    let ids: Vec<u32> = e.sd.dacl.as_ref().unwrap().aces.iter().map(|a| a.id).collect();
+    let html = shown(&e);
+    assert!(html.contains("fx-reorder=\"x-moved\"") && html.contains(&format!("id=\"x{}\" fx-drag fx-value-id=\"{}\"", ids[3], ids[3])), "{html}");
+    press(&mut e, "x-moved", json!({ "id": ids[3].to_string(), "to": "0" }));
+    let now: Vec<u32> = e.sd.dacl.as_ref().unwrap().aces.iter().map(|a| a.id).collect();
+    assert_eq!(now[..4], [ids[3], ids[0], ids[1], ids[2]]);
+    assert_eq!(e.adv.as_ref().unwrap().dacl, Some(ids[3]));
+    // Past the end, it goes last.
+    press(&mut e, "x-moved", json!({ "id": ids[3].to_string(), "to": "99" }));
+    assert_eq!(e.sd.dacl.as_ref().unwrap().aces.last().unwrap().id, ids[3]);
+    // A list the program can't change can't be dragged.
+    let mut e = editor(&finance(), Can { dacl: false, ..all() });
+    type_in(&mut e, "advmode", "on");
+    assert!(!shown(&e).contains("fx-drag"));
+    press(&mut e, "x-moved", json!({ "id": ids[3].to_string(), "to": "0" }));
+    assert_eq!(e.sd.dacl.as_ref().unwrap().aces[3].id, ids[3]);
+}
+
+#[test]
+fn the_descriptor_is_edited_as_text_within_what_the_program_can_change() {
+    let mut e = editor(&finance(), all());
+    type_in(&mut e, "advmode", "on");
+    press(&mut e, "top", json!({ "v": "desc" }));
+    press(&mut e, "x-text", json!({}));
+    let text = e.adv.as_ref().unwrap().text.clone().unwrap();
+    assert!(shown(&e).contains("Use This Text"));
+    // Unused changes hold Apply back.
+    let refuse = text.replace("(A;;0x1200a9;;;AU)", "(D;;0x1200a9;;;AU)");
+    type_in(&mut e, "x.sddl", &refuse);
+    assert!(e.fault().is_some_and(|f| f.0.contains("not used yet")));
+    press(&mut e, "x-text-use", json!({}));
+    assert!(e.adv.as_ref().unwrap().text.is_none(), "{:?}", e.wrong);
+    assert!(sddl_of(&e).contains("(D;;0x1200a9;;;AU)"));
+    assert_eq!(e.changed(), [Part::Dacl]);
+    // Wrong text is said, and stays to be put right.
+    press(&mut e, "x-text", json!({}));
+    type_in(&mut e, "x.sddl", &text.replace("(A;;0x1200a9;;;AU)", "(A;;0x1200a9;;;AU"));
+    press(&mut e, "x-text-use", json!({}));
+    assert!(e.wrong.get("x.sddl").is_some_and(|w| w.contains("bracket")));
+    press(&mut e, "escape", json!({}));
+    assert!(e.adv.as_ref().unwrap().text.is_none() && e.closer.is_none());
+    // A program that can't change the SACL can't have it changed by text.
+    let mut e = editor(&finance(), Can { audit: false, label: false, ..all() });
+    type_in(&mut e, "advmode", "on");
+    press(&mut e, "x-text", json!({}));
+    let text = e.adv.as_ref().unwrap().text.clone().unwrap();
+    type_in(&mut e, "x.sddl", &text.replace("(AU;OICIFA;", "(AU;OICISAFA;"));
+    press(&mut e, "x-text-use", json!({}));
+    assert_eq!(e.wrong.get("x.sddl").map(String::as_str), Some("The text changes the SACL, which can't be changed here."));
+    assert!(e.changed().is_empty());
 }
 
 #[test]

@@ -325,6 +325,10 @@ button.xrow[aria-selected="true"] { background: var(--surface-2); border-color: 
 .guid { font: 500 10.5px/1.4 var(--font-mono); color: var(--text-muted); overflow-wrap: anywhere; }
 .ctlflags { display: flex; flex-wrap: wrap; gap: 6px; }
 pre.sddl { margin: 0; padding: var(--space-3); border-radius: var(--radius-sm); background: var(--bg-sunken); border: 1px solid var(--border-default); overflow-x: auto; font: 500 11.5px/1.7 var(--font-mono); font-variant-ligatures: none; color: var(--text-secondary); white-space: pre; }
+/* Edited, the text keeps the layout it was read in: one entry a line,
+   scrolled across rather than wrapped, so an entry reads as one. */
+textarea.sddl { box-sizing: border-box; width: 100%; padding: var(--space-3); resize: vertical; font: 500 11.5px/1.7 var(--font-mono); font-variant-ligatures: none; white-space: pre; overflow-x: auto; }
+.fld .row { display: flex; flex-wrap: wrap; gap: 6px; }
 
 .note, .none { margin: 0; color: var(--text-muted); font-size: 12px; }
 .note.fixed { color: var(--text-secondary); }

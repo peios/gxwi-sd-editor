@@ -94,6 +94,8 @@ pub struct Adv {
     pub more: bool,
     /// The access list as it was when "No access list at all" was ticked.
     pub stash: Option<Acl>,
+    /// The whole descriptor as SDDL, while it is being edited as text.
+    pub text: Option<String>,
 }
 
 /// What is being asked of the person before anything more is done.
@@ -717,6 +719,9 @@ impl Live for Editor {
                 } else if self.asking.is_some() {
                     self.asking = None;
                     self.wrong.clear();
+                } else if let Some(adv) = self.adv.as_mut().filter(|a| a.text.is_some()) {
+                    adv.text = None;
+                    self.wrong.remove("x.sddl");
                 } else {
                     self.close();
                 }

@@ -34,6 +34,9 @@ pub const SHAPE: u8 = OI | CI | NP | IO;
 // The control bits a descriptor carries (PCDS §5.1).
 pub const DP: u16 = 0x0004;
 pub const SP: u16 = 0x0010;
+/// Each list's "auto-inherit required", which SDDL writes as AR.
+pub const DR: u16 = 0x0100;
+pub const SR_REQ: u16 = 0x0200;
 pub const DI: u16 = 0x0400;
 pub const SI: u16 = 0x0800;
 pub const PD: u16 = 0x1000;
@@ -81,8 +84,7 @@ impl Way {
 /// An entry type, by the byte KACS reads.
 pub struct Type {
     pub byte: u8,
-    /// How SDDL writes it. libpeios' SDDL has no codes for alarm entries or
-    /// the trust label, so these are written as they would be.
+    /// How SDDL writes it.
     pub code: &'static str,
     pub way: Way,
     /// Whether it carries object GUIDs, and a condition.

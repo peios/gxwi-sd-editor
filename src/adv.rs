@@ -45,7 +45,7 @@ pub fn enter(e: &mut Editor) {
     let picked = e.picked;
     let first_dacl = e.sd.dacl.as_ref().and_then(|d| d.aces.iter().find(|a| a.sid.is_some() && a.sid == picked).or(d.aces.first())).map(|a| a.id);
     let first_sacl = e.sd.sacl.as_ref().and_then(|s| s.aces.first()).map(|a| a.id);
-    e.adv = Some(Adv { tab: AdvTab::Dacl, dacl: first_dacl, sacl: first_sacl, more: false, stash: None });
+    e.adv = Some(Adv { tab: AdvTab::Dacl, dacl: first_dacl, sacl: first_sacl, more: false, stash: None, text: None });
     e.asking = None;
     e.checked = false;
 }
@@ -264,8 +264,9 @@ pub fn list(e: &Editor, which: List) -> String {
         .map(|(i, ace)| {
             let why = kept.iter().find(|(id, _)| *id == ace.id).map(|(_, w)| w);
             format!(
-                "<li{inh} id=\"x{id}\"><button type=\"button\" class=\"xrow\" role=\"option\" aria-selected=\"{on}\" fx-click=\"x-sel\" fx-value-id=\"{id}\"><span class=\"xn\">{n}</span><span class=\"xc {cls}\">{code}</span><span class=\"xw\">{who}</span><span class=\"xr\">{what}</span><span class=\"xs\">{place}</span><span class=\"xbs\">{badges}</span></button></li>",
+                "<li{inh} id=\"x{id}\"{drag}><button type=\"button\" class=\"xrow\" role=\"option\" aria-selected=\"{on}\" fx-click=\"x-sel\" fx-value-id=\"{id}\"><span class=\"xn\">{n}</span><span class=\"xc {cls}\">{code}</span><span class=\"xw\">{who}</span><span class=\"xr\">{what}</span><span class=\"xs\">{place}</span><span class=\"xbs\">{badges}</span></button></li>",
                 inh = if ace.inherited() { " class=\"inh\"" } else { "" },
+                drag = if may { format!(" fx-drag fx-value-id=\"{}\"", ace.id) } else { String::new() },
                 id = ace.id,
                 on = sel == Some(ace.id),
                 n = i + 1,
@@ -282,10 +283,11 @@ pub fn list(e: &Editor, which: List) -> String {
     let editor = sel.and_then(|id| acl.aces.iter().find(|a| a.id == id)).map(|ace| entry_editor(e, ace, which, &kept)).unwrap_or_default();
     format!(
         "{ctl}{order}<div class=\"xtable\"><div class=\"xcols\" aria-hidden=\"true\"><span>#</span><span>Type</span><span>{}</span><span>{}</span><span>Applies To</span><span></span></div>\
-         <ol class=\"xlist\" role=\"listbox\" aria-label=\"{}\">{}</ol></div>{}{editor}{}",
+         <ol class=\"xlist\" role=\"listbox\" aria-label=\"{}\"{}>{}</ol></div>{}{editor}{}",
         if which == List::Dacl { "Who" } else { "Who or What" },
         if which == List::Dacl { "Rights" } else { "Says" },
         if which == List::Dacl { "Access list entries" } else { "SACL entries" },
+        if may { " fx-reorder=\"x-moved\"" } else { "" },
         if rows.is_empty() { format!("<li class=\"xnone\">{empty}</li>") } else { rows },
         if may { "<div class=\"under\"><button type=\"button\" fx-click=\"x-add\">+ Add Entry</button></div>" } else { "" },
         wrapped_note(&format!(
@@ -295,7 +297,7 @@ pub fn list(e: &Editor, which: List) -> String {
             } else {
                 "Order in the SACL changes nothing, so the simple view writes it back in the standard order: label, trust, auditing, claims, policies, then anything else."
             },
-            if acl.aces.is_empty() || !may { "" } else { " Alt with ↑ or ↓ moves the picked entry." }
+            if acl.aces.is_empty() || !may { "" } else { " Drag an entry to move it, or press Alt with ↑ or ↓ to move the picked one." }
         ))
     )
 }
@@ -550,7 +552,8 @@ fn fields(e: &Editor, ace: &Ace, which: List, fixed: bool) -> String {
 /// The Descriptor tab: the owner, the primary group, the control flags, and
 /// the whole descriptor as SDDL.
 pub fn desc(e: &Editor) -> String {
-    let off = if e.may_owner() { "" } else { " disabled" };
+    let editing = e.adv.as_ref().and_then(|a| a.text.as_ref());
+    let off = if e.may_owner() && editing.is_none() { "" } else { " disabled" };
     let sid_field = |k: &str, label: &str, v: Option<Sid>, hint: &str| {
         let name = format!("x.{k}");
         let shown = v.map_or_else(String::new, |s| if e.names.named(&s) { e.name(&s) } else { s.to_string() });
@@ -582,18 +585,102 @@ pub fn desc(e: &Editor) -> String {
         let on = c & bit != 0;
         format!("<span class=\"xb{}\" title=\"{}{}\">{} {code} · {}</span>", if on { " on" } else { "" }, h(n), if on { "" } else { " (off)" }, if on { "✓" } else { "–" }, h(n))
     }).collect();
+    let whole = sd_text(&e.sd);
+    let sddl = match editing {
+        Some(draft) => {
+            let rows = draft.lines().count().clamp(6, 18) + 1;
+            let wrong = e.wrong.get("x.sddl").map(|w| format!("<span class=\"wrong\">{}</span>", h(w))).unwrap_or_default();
+            format!(
+                "<textarea class=\"sddl\" {} rows=\"{rows}\" spellcheck=\"false\" autocomplete=\"off\" fx-autofocus{}>{}</textarea>{wrong}\
+                 <span class=\"hint\">Entries you leave as they are go back exactly as they came. A comment marked # stands for an entry SDDL can't say: leave it where it should be, or take it out to remove the entry.</span>\
+                 <div class=\"row\"><button type=\"button\" class=\"small primary\" fx-click=\"x-text-use\" fx-key=\"Ctrl+Enter\">Use This Text</button><button type=\"button\" class=\"small\" fx-click=\"x-text-cancel\">Cancel</button></div>",
+                e.field("x.sddl", draft),
+                if wrong.is_empty() { "" } else { " aria-invalid=\"true\"" },
+                h(draft)
+            )
+        }
+        None => format!(
+            "<pre class=\"sddl\">{}</pre>{}",
+            h(&whole),
+            if may_text(e) { "<div class=\"row\"><button type=\"button\" class=\"small\" fx-click=\"x-text\">Edit as Text</button></div>" } else { "" }
+        ),
+    };
     format!(
         "<div class=\"xgrid\">{}{}</div><datalist id=\"may-own\">{}</datalist>{}\
          <div class=\"fld\"><span>Control Flags</span><div class=\"ctlflags\">{chips}</div>{}</div>\
-         <div class=\"fld\"><span>The Whole Descriptor, as SDDL</span><pre class=\"sddl\">{}</pre></div>{}",
+         <div class=\"fld\"><span>The Whole Descriptor, as SDDL</span>{sddl}</div>{}",
         sid_field("owner", "Owner", e.sd.owner, &own_hint),
         sid_field("group", "Primary Group", e.sd.group, ""),
         may_own.iter().map(|n| format!("<option value=\"{}\">", h(n))).collect::<String>(),
         if e.can.owner { String::new() } else { format!("<p class=\"note fixed\">{}</p>", h(e.can.why.as_deref().unwrap_or("The program that opened this can't change the owner."))) },
         wrapped_note("Presence and protection are set on each list's tab; the others are kept as found."),
-        h(&sd_text(&e.sd)),
-        wrapped_note("SDDL has no code for some entries, such as a type KACS doesn't act on, so they show as a comment. The editor hands the descriptor back as bytes (PSPU §8.5), so they still go back exactly as they came.")
+        if editing.is_some() { String::new() } else { wrapped_note("SDDL has no code for some entries, such as a type KACS doesn't act on, so they show as a comment. The editor hands the descriptor back as bytes (PSPU §8.5), so they still go back exactly as they came.") }
     )
+}
+
+/// Whether anything the text says can be changed.
+fn may_text(e: &Editor) -> bool {
+    e.may_owner() || e.may_dacl() || e.may_sacl() || e.may_label()
+}
+
+/// Why the descriptor the text says can't be taken, if it can't: it changes
+/// a part this program can't, or the SACL beyond the label where only the
+/// label can be.
+fn text_refused(e: &Editor, new: &Descriptor) -> Option<String> {
+    let same = |a: &Option<Acl>, b: &Option<Acl>, keep: &dyn Fn(&Ace) -> bool| match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            let (a, b): (Vec<&Ace>, Vec<&Ace>) = (a.aces.iter().filter(|x| keep(x)).collect(), b.aces.iter().filter(|x| keep(x)).collect());
+            a.len() == b.len() && a.iter().zip(&b).all(|(x, y)| x.same(y))
+        }
+        _ => false,
+    };
+    let all = |_: &Ace| true;
+    let differs = |bits: u16| (new.control ^ e.sd.control) & bits != 0;
+    if (new.owner != e.sd.owner || new.group != e.sd.group) && !e.may_owner() {
+        return Some("The text changes the owner or group, which can't be changed here.".into());
+    }
+    if (!same(&new.dacl, &e.sd.dacl, &all) || differs(PD | DI | DR)) && !e.may_dacl() {
+        return Some("The text changes the access list, which can't be changed here.".into());
+    }
+    if e.may_sacl() || (same(&new.sacl, &e.sd.sacl, &all) && !differs(PS | SI | SR_REQ)) {
+        return None;
+    }
+    if e.may_label() && same(&new.sacl, &e.sd.sacl, &|a| a.way != Way::Label) && !differs(PS | SI | SR_REQ) {
+        return None;
+    }
+    Some(if e.may_label() { "The text changes the SACL beyond its integrity label, and only the label can be changed here." } else { "The text changes the SACL, which can't be changed here." }.into())
+}
+
+/// Takes the descriptor the text says, if it can be.
+fn use_text(e: &mut Editor) {
+    let Some(draft) = e.adv.as_ref().and_then(|a| a.text.clone()) else { return };
+    let taken = from_text(&draft, &e.sd, &mut e.ids).and_then(|new| text_refused(e, &new).map_or(Ok(new), Err));
+    match taken {
+        Err(why) => {
+            e.wrong.insert("x.sddl".into(), why);
+        }
+        Ok(new) => {
+            e.wrong.remove("x.sddl");
+            let changed = new != e.sd;
+            for sid in new.owner.iter().chain(&new.group).chain(new.dacl.iter().chain(&new.sacl).flat_map(|a| &a.aces).filter_map(|a| a.sid.as_ref())) {
+                e.names.learn(sid);
+            }
+            e.sd = new;
+            let first = |acl: &Option<Acl>| acl.as_ref().and_then(|a| a.aces.first()).map(|a| a.id);
+            let (dacl, sacl) = (first(&e.sd.dacl), first(&e.sd.sacl));
+            let keep = |id: Option<u32>, acl: &Option<Acl>| id.filter(|id| acl.iter().flat_map(|a| &a.aces).any(|a| a.id == *id));
+            let (was_dacl, was_sacl) = e.adv.as_ref().map_or((None, None), |a| (a.dacl, a.sacl));
+            let (dacl, sacl) = (keep(was_dacl, &e.sd.dacl).or(dacl), keep(was_sacl, &e.sd.sacl).or(sacl));
+            if let Some(a) = &mut e.adv {
+                a.text = None;
+                a.stash = None;
+                a.dacl = dacl;
+                a.sacl = sacl;
+            }
+            e.status = if changed { "The descriptor now says what the text says.".into() } else { "The text says what the descriptor already did.".into() };
+        }
+    }
 }
 
 /// The keys Advanced mode's lists answer to.
@@ -609,6 +696,11 @@ pub fn keys(e: &Editor) -> String {
 /// What stops the entries being written, if anything: only what can't be
 /// written, or would do nothing at all, of what has changed.
 pub fn fault(e: &Editor) -> Option<(String, Place)> {
+    if let Some(draft) = e.adv.as_ref().and_then(|a| a.text.as_ref())
+        && *draft != sd_text(&e.sd)
+    {
+        return Some(("The text has changes not used yet. Use This Text, or Cancel them.".into(), Place::Descriptor));
+    }
     let changed_owner = e.sd.owner != e.applied.owner;
     match e.sd.owner {
         None => return Some(("Nobody owns it. Name an owner.".into(), Place::Descriptor)),
@@ -726,6 +818,24 @@ pub fn event(e: &mut Editor, name: &str, value: &Value, _fields: &mut Fields) {
         }
         return;
     }
+    match name {
+        "x-text" if may_text(e) => {
+            let whole = sd_text(&e.sd);
+            if let Some(a) = &mut e.adv {
+                a.text = Some(whole);
+            }
+            return;
+        }
+        "x-text-use" => return use_text(e),
+        "x-text-cancel" => {
+            if let Some(a) = &mut e.adv {
+                a.text = None;
+            }
+            e.wrong.remove("x.sddl");
+            return;
+        }
+        _ => {}
+    }
     let Some(which) = current(e) else { return };
     if name == "x-sel" {
         if let Ok(id) = v("id").parse() {
@@ -752,6 +862,19 @@ pub fn event(e: &mut Editor, name: &str, value: &Value, _fields: &mut Fields) {
         // A new entry goes before what is inherited.
         let at = if which == List::Dacl { list.aces.iter().position(Ace::inherited).unwrap_or(list.aces.len()) } else { list.aces.len() };
         list.aces.insert(at, ace);
+        select(e, which, Some(id));
+        return;
+    }
+    if name == "x-moved" {
+        // Dropped somewhere else among the entries: `to` is where it now is.
+        let (Ok(id), Ok(to)) = (v("id").parse::<u32>(), v("to").parse::<usize>()) else { return };
+        if !may_list(e, which) {
+            return;
+        }
+        let Some(acl) = acl_mut(e, which) else { return };
+        let Some(from) = acl.aces.iter().position(|a| a.id == id) else { return };
+        let ace = acl.aces.remove(from);
+        acl.aces.insert(to.min(acl.aces.len()), ace);
         select(e, which, Some(id));
         return;
     }
@@ -867,6 +990,13 @@ pub fn input(e: &mut Editor, name: &str, value: &str) {
     }
     let parts: Vec<&str> = name.split('.').collect();
     match parts.as_slice() {
+        ["x", "sddl"] => {
+            if let Some(a) = &mut e.adv
+                && a.text.is_some()
+            {
+                a.text = Some(value.to_string());
+            }
+        }
         ["x", "owner" | "group"] => {
             if !e.may_owner() {
                 return;
