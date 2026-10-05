@@ -248,6 +248,17 @@ fn only_the_misplaced_rule_for_a_part_is_kept_and_moving_it_frees_it() {
 }
 
 #[test]
+fn what_could_not_be_pushed_into_says_its_insides_were_left() {
+    let mut e = editor(&finance(), all());
+    let failed = |n: usize| (0..n).map(|i| gxwi_sd_editor::Failure { name: format!("/srv/finance/q{i}"), why: "you are not allowed to".into() }).collect();
+    e.pushed = Some(gxwi_sd_editor::Walked { done: 30_006, failed: failed(1), stopped: false });
+    let html = shown(&e);
+    assert!(html.contains("30,006 items inside updated; 1 item couldn't be.") && html.contains("Anything inside it was left as it was, too."), "{html}");
+    e.pushed = Some(gxwi_sd_editor::Walked { done: 4, failed: failed(2), stopped: false });
+    assert!(shown(&e).contains("Anything inside those was left as it was, too."));
+}
+
+#[test]
 fn an_entry_dragged_is_where_it_was_dropped() {
     let mut e = editor(&finance(), all());
     type_in(&mut e, "advmode", "on");

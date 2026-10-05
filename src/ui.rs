@@ -227,7 +227,9 @@ impl Editor {
             if w.stopped {
                 said.push_str(&format!(" {} couldn't be:", crate::items(w.failed.len() as u64)));
             }
-            said.push_str(&format!("</p><ul class=\"failed\">{list}{more}</ul><p>"));
+            // What is inside one that failed was never reached, so it isn't
+            // counted either way.
+            said.push_str(&format!("</p><ul class=\"failed\">{list}{more}</ul><p>Anything inside {} was left as it was, too.", if w.failed.len() == 1 { "it" } else { "those" }));
         }
         banner(
             true,
