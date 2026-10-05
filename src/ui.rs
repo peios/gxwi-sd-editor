@@ -742,7 +742,13 @@ impl Editor {
         let rows: String = rights
             .iter()
             .zip(&shown)
-            .map(|(r, (a, d))| format!("<tr><th scope=\"row\">{}</th>{}{}</tr>", h(&r.name), tick_box(*a, "tick", r.mask, "allow", &r.name, fixed, ""), tick_box(*d, "tick", r.mask, "deny", &r.name, fixed, "")))
+            .enumerate()
+            .map(|(i, (r, (a, d)))| {
+                // Which right of the list it is, as well as its mask, for
+                // whatever finds a box by its place.
+                let row = |t: Tick, way: &str| tick_box(t, "tick", r.mask, way, &r.name, fixed, "").replace(" fx-value-way=", &format!(" fx-value-right=\"{i}\" fx-value-way="));
+                format!("<tr><th scope=\"row\">{}</th>{}{}</tr>", h(&r.name), row(*a, "allow"), row(*d, "deny"))
+            })
             .collect();
         let greyed = if shown.iter().any(|(a, d)| *a == Tick::Inherited || *d == Tick::Inherited) { wrapped_note("Greyed ticks are inherited from what this is in, and are changed there.") } else { String::new() };
         format!("{adv_only}{scope}<table class=\"rights\"><thead><tr><th></th><th scope=\"col\">Allow</th><th scope=\"col\">Deny</th></tr></thead><tbody>{rows}</tbody></table>{greyed}{toggle}{notes}{also}")

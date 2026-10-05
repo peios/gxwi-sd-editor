@@ -88,7 +88,14 @@ impl Caller {
     /// Whom the owner may be given to, besides anyone with SeRestore: the
     /// caller, and the groups it may own things as.
     pub fn may_own(&self) -> Vec<Sid> {
-        self.user.iter().chain(&self.owner_groups).copied().collect()
+        let mut out: Vec<Sid> = Vec::new();
+        // A token may carry its own user among its groups as well.
+        for sid in self.user.iter().chain(&self.owner_groups) {
+            if !out.contains(sid) {
+                out.push(*sid);
+            }
+        }
+        out
     }
 
     /// Whether a label at `level` is one it may set.
