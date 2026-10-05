@@ -19,7 +19,9 @@
 //! `sd` is a self-relative security descriptor's bytes, in base64, whichever
 //! way it goes. What the editor sends is the whole of what it shows, and
 //! `parts` are the parts of it that changed, which are the ones to apply:
-//! the rest is as it was read. A descriptor is sent whole and only when the
+//! the rest is as it was read. The integrity label is a part of its own,
+//! sent only to a program that said it can apply one (`can.label`), and
+//! never with the SACL, which carries the label when it is sent. A descriptor is sent whole and only when the
 //! person says so, never as they change it: one applied half way through can
 //! take away the access needed to finish. A failure is shown in the dialog,
 //! which stays open to be put right.
@@ -64,7 +66,34 @@ pub fn splice(current: &[u8], edited: &[u8], parts: &[Part]) -> Result<Vec<u8>, 
         Some(dacl) => sd.dacl(&dacl.to_acl().map_err(|e| format!("its access list could not be made ({e})"))?),
         None => sd.dacl_grant_all(),
     };
-    if let Some(sacl) = from(Part::Sacl).sacl() {
+    if parts.contains(&Part::Label) && !parts.contains(&Part::Sacl) {
+        // The label from what was edited, and the rest of the SACL as it is.
+        use peios::security::{Ace, AceType, AclBuilder};
+        let mut acl = AclBuilder::new();
+        let label = |ace: &peios::security::AceView<'_>| ace.ace_type() == AceType::SystemMandatoryLabel;
+        let mut any = false;
+        for (sacl, keep_labels) in [(current.sacl(), false), (edited.sacl(), true)] {
+            for ace in sacl.iter().flat_map(|sacl| sacl.iter().collect::<Vec<_>>()) {
+                if label(&ace) != keep_labels {
+                    continue;
+                }
+                let sid = ace.sid().ok_or("its audit list has an entry with nobody in it")?;
+                acl.add(&Ace {
+                    ace_type: ace.ace_type(),
+                    flags: ace.flags(),
+                    mask: ace.mask(),
+                    sid,
+                    object_type: ace.object_type(),
+                    inherited_object_type: ace.inherited_object_type(),
+                    app_data: ace.app_data(),
+                });
+                any = true;
+            }
+        }
+        if any || current.sacl().is_some() {
+            sd.sacl(&acl.build().map_err(|e| format!("its audit list could not be made ({e})"))?);
+        }
+    } else if let Some(sacl) = from(Part::Sacl).sacl() {
         sd.sacl(&sacl.to_acl().map_err(|e| format!("its audit list could not be made ({e})"))?);
     }
     let kept = (from(Part::Dacl).control() & (Control::DACL_PROTECTED | Control::DACL_AUTO_INHERITED))
@@ -78,13 +107,19 @@ pub fn splice(current: &[u8], edited: &[u8], parts: &[Part]) -> Result<Vec<u8>, 
 pub const PROGRAM: &str = "/usr/bin/gxwi-sd-editor";
 
 /// What the program tells the editor, as the first line of its input.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Request {
     pub object: Object,
     /// The descriptor as it is now: the owner, the group and the access list,
     /// and the rest if the program could read it.
     #[serde(with = "base64_bytes")]
     pub sd: Vec<u8>,
+    /// Which parts `sd` holds as they are: some of owner, group, dacl, sacl
+    /// and label. A SACL that holds only the label, because that was all the
+    /// program could read, is `label` without `sacl`. Left out, it is
+    /// everything `sd` has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read: Option<Vec<Part>>,
     /// What the object's rights are called. The `general` ones are what the
     /// person is shown and ticks, from the most to the least: "Full
     /// control", "Read". A mask that is more than they can say is shown as
@@ -99,7 +134,7 @@ pub struct Request {
 }
 
 /// The object whose descriptor it is.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Object {
     /// What it is called where the person found it: `notes.txt`.
     pub name: String,
@@ -113,6 +148,59 @@ pub struct Object {
     /// passed on to.
     #[serde(default, skip_serializing_if = "Children::is_all")]
     pub children: Children,
+    /// What it is in, which is what its inherited entries come from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<Parent>,
+    /// Its parts that rules can be made for one at a time, as an account's
+    /// sign-in details are: object types (PCDS §5.4).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<ObjectPart>,
+    /// On a container of typed things, the kinds of thing it holds, which a
+    /// rule can be passed on to alone: inherited object types.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kinds: Vec<ChildKind>,
+}
+
+/// What an object is in.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Parent {
+    /// What it is called where the person knows it: `/srv`.
+    pub name: String,
+    /// Its descriptor, if the program could read it: what is passed on from
+    /// it is worked out from this when inheriting is turned back on, since
+    /// that takes nothing back from it by itself.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "base64_option")]
+    pub sd: Option<Vec<u8>>,
+}
+
+/// A part of an object, by its object type.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ObjectPart {
+    /// The GUID, as it is written: `bf967aba-0de6-11d0-a285-00aa003049e2`.
+    pub guid: String,
+    pub name: String,
+    pub kind: PartKind,
+    /// The set it is in, by the set's GUID, for a property.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set: Option<String>,
+}
+
+/// What a part is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PartKind {
+    /// A set of properties, which a rule for it covers all of.
+    Set,
+    Property,
+    /// An action, such as resetting a password.
+    Right,
+}
+
+/// A kind of thing a container holds.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChildKind {
+    pub guid: String,
+    pub name: String,
 }
 
 /// What a container holds.
@@ -162,6 +250,11 @@ pub struct Can {
     pub owner: bool,
     #[serde(default)]
     pub audit: bool,
+    /// Whether it can change the integrity label by itself, which takes the
+    /// right to change the owner rather than the SACL's: it is then sent
+    /// the `label` part. Left out, it cannot, and is never sent it.
+    #[serde(default)]
+    pub label: bool,
     /// Why it cannot change what it cannot, for the person to read: "You
     /// may not change this service's definition."
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -170,7 +263,7 @@ pub struct Can {
 
 impl Default for Can {
     fn default() -> Can {
-        Can { dacl: true, owner: false, audit: false, why: None }
+        Can { dacl: true, owner: false, audit: false, label: false, why: None }
     }
 }
 
@@ -186,6 +279,9 @@ pub enum Part {
     Group,
     Dacl,
     Sacl,
+    /// The integrity label alone, in the SACL, applied as KACS applies a
+    /// label (LABEL_SECURITY_INFORMATION): the rest of the SACL stays.
+    Label,
 }
 
 /// What the editor tells the program.
@@ -281,6 +377,26 @@ mod base64_bytes {
     }
 }
 
+/// Bytes that may be left out, as base64 text.
+mod base64_option {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &Option<Vec<u8>>, to: S) -> Result<S::Ok, S::Error> {
+        match bytes {
+            Some(bytes) => super::base64_bytes::serialize(bytes, to),
+            None => to.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(from: D) -> Result<Option<Vec<u8>>, D::Error> {
+        use base64::Engine;
+        match Option::<String>::deserialize(from)? {
+            Some(text) => base64::engine::general_purpose::STANDARD.decode(text).map(Some).map_err(serde::de::Error::custom),
+            None => Ok(None),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,14 +418,47 @@ mod tests {
         assert!(splice(&now, b"nonsense", &[Part::Dacl]).is_err());
     }
 
+    #[cfg(feature = "splice")]
+    #[test]
+    fn a_label_alone_takes_the_label_and_keeps_the_rest_of_the_sacl() {
+        use peios::security::sddl;
+        let bytes = |text: &str| sddl::parse(text).unwrap().as_bytes().to_vec();
+        let now = bytes("O:SYG:SYD:(A;;0xf;;;SY)S:(ML;;NW;;;ME)(AU;FA;0x1;;;WD)");
+        let edited = bytes("O:SYG:SYD:(A;;0xf;;;SY)S:(ML;;NWNR;;;LW)(AU;SA;0x2;;;WD)");
+        let applied = sddl::format(&splice(&now, &edited, &[Part::Label]).unwrap()).unwrap();
+        assert!(applied.contains("(AU;FA;0x1;;;WD)") && applied.contains("(ML;;NWNR;;;LW)"), "{applied}");
+        assert!(!applied.contains("SA;0x2") && !applied.contains(";ME)"), "{applied}");
+        // With the SACL as well, the SACL is what goes, label and all.
+        let whole = sddl::format(&splice(&now, &edited, &[Part::Sacl, Part::Label]).unwrap()).unwrap();
+        assert!(whole.contains("(AU;SA;0x2;;;WD)"), "{whole}");
+    }
+
     fn request() -> Request {
         Request {
-            object: Object { name: "notes.txt".into(), kind: "File".into(), container: false, children: Children::All },
+            object: Object { name: "notes.txt".into(), kind: "File".into(), ..Object::default() },
             sd: vec![1, 0, 4, 128],
             rights: vec![Right { name: "Read".into(), mask: 0x0012_0089, general: true }],
             generic: Generic { read: 1, write: 2, execute: 4, all: 8 },
             can: Can { owner: true, ..Can::default() },
+            ..Request::default()
         }
+    }
+
+    #[test]
+    fn what_the_redesign_adds_crosses_and_is_left_out_unsaid() {
+        let mut full = request();
+        full.read = Some(vec![Part::Owner, Part::Group, Part::Dacl, Part::Label]);
+        full.can.label = true;
+        full.object.parent = Some(Parent { name: "/srv".into(), sd: Some(vec![1, 2]) });
+        full.object.parts = vec![ObjectPart { guid: "77b5b886-944a-11d1-aebd-0000f80367c1".into(), name: "Personal information".into(), kind: PartKind::Set, set: None }];
+        full.object.kinds = vec![ChildKind { guid: "bf967aba-0de6-11d0-a285-00aa003049e2".into(), name: "Accounts".into() }];
+        let said = line(&full);
+        assert!(said.contains("\"parent\":{\"name\":\"/srv\",\"sd\":\"AQI=\"}") && said.contains("\"read\":[\"owner\",\"group\",\"dacl\",\"label\"]"), "{said}");
+        assert_eq!(serde_json::from_str::<Request>(&said).unwrap(), full);
+        let plain = line(&request());
+        assert!(!plain.contains("parent") && !plain.contains("parts") && !plain.contains("kinds") && !plain.contains("\"read\":["), "{plain}");
+        let bare: Object = serde_json::from_str(r#"{"name":"x","kind":"Folder","parent":{"name":"/"}}"#).unwrap();
+        assert_eq!(bare.parent, Some(Parent { name: "/".into(), sd: None }));
     }
 
     #[test]
@@ -322,7 +471,7 @@ mod tests {
         // nothing else, as before it could say otherwise.
         let bare = r#"{"object":{"name":"k","kind":"Key"},"sd":"","rights":[],"generic":{"read":0,"write":0,"execute":0,"all":0}}"#;
         let bare: Request = serde_json::from_str(bare).unwrap();
-        assert_eq!((bare.object.container, &bare.can), (false, &Can { dacl: true, owner: false, audit: false, why: None }));
+        assert_eq!((bare.object.container, &bare.can), (false, &Can { dacl: true, owner: false, audit: false, label: false, why: None }));
         assert!(!said.contains("children"), "a container of everything is the default, and goes unsaid");
         let key: Object = serde_json::from_str(r#"{"name":"sshd","kind":"Registry key","container":true,"children":"containers"}"#).unwrap();
         assert_eq!(key.children, Children::Containers);
@@ -330,7 +479,7 @@ mod tests {
         assert!(older.can.dacl && older.can.owner);
         // One that may only look says so, and why.
         let looking = Can { dacl: false, why: Some("You may not change it.".into()), ..Can::default() };
-        assert_eq!(line(&looking), "{\"dacl\":false,\"owner\":false,\"audit\":false,\"why\":\"You may not change it.\"}\n");
+        assert_eq!(line(&looking), "{\"dacl\":false,\"owner\":false,\"audit\":false,\"label\":false,\"why\":\"You may not change it.\"}\n");
         assert!(!line(&Can::default()).contains("why"));
     }
 

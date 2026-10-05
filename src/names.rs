@@ -54,12 +54,15 @@ const ALSO: &[(&str, &str)] = &[
     ("NetworkService", "S-1-5-20"),
 ];
 
-/// One question to the authority, and its answer.
-type Ask = fn(Key) -> io::Result<Option<(Sid, String)>>;
+/// One question to the authority, and its answer: the SID, the name, and
+/// whether it is a group.
+type Ask = fn(Key) -> io::Result<Option<(Sid, String, bool)>>;
 
 /// The names known so far, so that a render never waits on the authority.
 pub struct Names {
     known: HashMap<Sid, String>,
+    /// Which of those the authority said are groups.
+    groups: std::collections::HashSet<Sid>,
     /// Whom to ask about the rest. `None` asks nobody, for tests.
     ask: Option<Ask>,
 }
@@ -72,13 +75,18 @@ impl Default for Names {
 
 impl Names {
     pub fn new() -> Names {
-        Names { known: HashMap::new(), ask: Some(ask) }
+        Names { known: HashMap::new(), groups: Default::default(), ask: Some(ask) }
     }
 
     /// Names that ask nobody: the well-known ones, and SIDs for the rest.
     /// For tests, and wherever the authority is not to be waited on.
     pub fn offline() -> Names {
-        Names { known: HashMap::new(), ask: None }
+        Names { known: HashMap::new(), groups: Default::default(), ask: None }
+    }
+
+    /// Whether the authority said `sid` is a group.
+    pub fn is_group(&self, sid: &SidRef) -> bool {
+        self.groups.contains(&sid.to_sid())
     }
 
     /// Finds out what `sid` is called, to be said by [`Names::of`].
@@ -90,7 +98,12 @@ impl Names {
         let raw = sid.to_string();
         let name = match WELL_KNOWN.iter().find(|(known, _)| *known == raw) {
             Some((_, name)) => Some(name.to_string()),
-            None => self.ask.and_then(|ask| ask(Key::Sid(sid.as_bytes().to_vec())).ok().flatten()).map(|(_, name)| name),
+            None => self.ask.and_then(|ask| ask(Key::Sid(sid.as_bytes().to_vec())).ok().flatten()).map(|(_, name, group)| {
+                if group {
+                    self.groups.insert(owned);
+                }
+                name
+            }),
         };
         self.known.insert(owned, name.unwrap_or(raw));
     }
@@ -133,8 +146,11 @@ impl Names {
         }
         let Some(ask) = self.ask else { return Err(format!("There is nobody called {typed}.")) };
         match ask(Key::Name(typed.into())) {
-            Ok(Some((sid, name))) => {
+            Ok(Some((sid, name, group))) => {
                 self.known.insert(sid, name);
+                if group {
+                    self.groups.insert(sid);
+                }
                 Ok(sid)
             }
             Ok(None) => Err(format!("There is nobody called {typed}.")),
@@ -145,12 +161,12 @@ impl Names {
 
 /// One question to the authority. `Ok(None)` is its word that there is no
 /// such principal.
-fn ask(key: Key) -> io::Result<Option<(Sid, String)>> {
+fn ask(key: Key) -> io::Result<Option<(Sid, String, bool)>> {
     // The name and the SID are always answered: no more is asked, so that
     // nothing is withheld that was not needed.
     let Some(record) = Ident::new().with_timeout(TIMEOUT).lookup(key, Kind::Any, Fields::empty())? else { return Ok(None) };
     let sid = SidRef::from_bytes(&record.sid).map(SidRef::to_sid).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "authd answered with a SID that isn't one"))?;
-    Ok(Some((sid, record.qualified_name)))
+    Ok(Some((sid, record.qualified_name, record.kind_found == Kind::Group)))
 }
 
 #[cfg(test)]

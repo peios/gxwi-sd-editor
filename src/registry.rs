@@ -64,15 +64,27 @@ pub fn key(path: &str, name: &str, cannot: &str) -> Result<(Request, Apply), Str
         }
     }
     let Some((key, dacl, owner)) = opened else { return Err("you may not read who may use it".into()) };
-    let descriptor = key
-        .get_security(SecInfo::OWNER | SecInfo::GROUP | SecInfo::DACL)
-        .map_err(|e| if e.raw_os_error() == Some(EACCES) { "you may not read who may use it".to_string() } else { format!("who may use it could not be read ({e})") })?;
+    // The integrity label as well, where it can be read: it is changed with
+    // the right to change the owner.
+    let basic = SecInfo::OWNER | SecInfo::GROUP | SecInfo::DACL;
+    let (descriptor, labelled) = match key.get_security(basic | SecInfo::LABEL) {
+        Ok(descriptor) => (descriptor, true),
+        Err(_) => (
+            key.get_security(basic).map_err(|e| if e.raw_os_error() == Some(EACCES) { "you may not read who may use it".to_string() } else { format!("who may use it could not be read ({e})") })?,
+            false,
+        ),
+    };
+    let mut read = vec![Part::Owner, Part::Group, Part::Dacl];
+    if labelled {
+        read.push(Part::Label);
+    }
     let request = Request {
-        object: Object { name: name.into(), kind: format!("Registry key {path}"), container: true, children: Children::Containers },
+        object: Object { name: name.into(), kind: format!("Registry key {path}"), container: true, children: Children::Containers, ..Object::default() },
         sd: descriptor.as_bytes().to_vec(),
+        read: Some(read),
         rights: key_rights(),
         generic: key_generic(),
-        can: Can { dacl, owner, audit: false, why: (!dacl).then(|| cannot.to_string()) },
+        can: Can { dacl, owner, label: owner && labelled, why: (!dacl).then(|| cannot.to_string()), ..Can::default() },
     };
     let apply = move |sd: &[u8], parts: &[Part]| {
         let mut secinfo = SecInfo::empty();
@@ -82,6 +94,7 @@ pub fn key(path: &str, name: &str, cannot: &str) -> Result<(Request, Apply), Str
                 Part::Group => SecInfo::GROUP,
                 Part::Dacl => SecInfo::DACL,
                 Part::Sacl => SecInfo::SACL,
+                Part::Label => SecInfo::LABEL,
             };
         }
         let sd = SecurityDescriptor::from_validated_bytes(sd.to_vec()).map_err(|e| format!("it is not a security descriptor ({e})"))?;
