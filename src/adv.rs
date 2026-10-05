@@ -149,9 +149,6 @@ fn where_(e: &Editor, ace: &Ace) -> String {
     if f & IO != 0 && !passes(f) {
         return "Nowhere".into();
     }
-    if !ace.way.accessy() {
-        return if passes(f) { if f & IO != 0 { "Only what's inside".into() } else { format!("This {w} and what's inside") } } else { format!("This {w}") };
-    }
     if e.obj.container { e.obj.scope_label(f) } else { format!("This {w}") }
 }
 

@@ -328,6 +328,8 @@ impl Editor {
         let listed = std::mem::take(&mut self.listed);
         self.listed = listed.into_iter().filter(|s| now.contains(s) || self.added.contains(s)).collect();
         for s in now {
+            // Inheriting again can bring in someone not named before.
+            self.names.learn(&s);
             if !self.listed.contains(&s) {
                 self.listed.push(s);
             }
