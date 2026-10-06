@@ -184,6 +184,9 @@ pub struct Editor {
     pub pushed: Option<Walked>,
     pub push_parts: Vec<Part>,
     pub closer: Option<Closer>,
+    /// How many times the program has asked for the dialog to be brought
+    /// to the front. The page asks the desktop each time it changes.
+    pub raised: u32,
     /// Whom Effective Access is for, and for which part.
     pub eff_who: Option<Sid>,
     pub eff_part: Option<Guid>,
@@ -278,6 +281,7 @@ impl Editor {
             pushed: None,
             push_parts: Vec::new(),
             closer: None,
+            raised: 0,
             eff_who: None,
             eff_part: None,
             people: HashMap::new(),
@@ -564,6 +568,10 @@ impl Editor {
 
     /// What the program answered. Whether the dialog is done with.
     fn answered(&mut self, answer: ToEditor) -> bool {
+        if answer == ToEditor::Raise {
+            self.raised += 1;
+            return false;
+        }
         if let ToEditor::Progress { done, at } = answer {
             if let Some(p) = &mut self.pushing {
                 p.done = done;
@@ -594,7 +602,7 @@ impl Editor {
                 self.trouble = Some(format!("This could not be applied: {why}"));
                 false
             }
-            ToEditor::Progress { .. } => false,
+            ToEditor::Progress { .. } | ToEditor::Raise => false,
         }
     }
 

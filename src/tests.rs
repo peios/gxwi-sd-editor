@@ -535,6 +535,17 @@ fn changing_what_is_passed_down_asks_whether_to_update_what_is_inside() {
 }
 
 #[test]
+fn asked_for_again_the_dialog_asks_to_be_brought_forward() {
+    let mut e = editor(&format!("O:{o}G:{o}D:(A;OICI;FA;;;SY)", o = sid(1001)), all());
+    assert!(shown(&e).contains("fx-raise=\"0\""));
+    // It needs no answer, keeps the dialog open, and touches nothing else.
+    assert!(!e.answered(ToEditor::Raise));
+    assert!(!e.answered(ToEditor::Raise));
+    assert!(shown(&e).contains("fx-raise=\"2\""));
+    assert!(e.changed().is_empty() && e.trouble.is_none());
+}
+
+#[test]
 fn a_program_that_can_change_nothing_gets_only_close() {
     let mut e = editor("O:SYG:SYD:(A;OICI;FA;;;SY)", Can { dacl: false, owner: false, audit: false, label: false, propagate: false, why: Some("You may not change it here.".into()) });
     let html = shown(&e);

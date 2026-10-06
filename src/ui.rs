@@ -173,12 +173,13 @@ impl Editor {
             "<button type=\"button\" class=\"primary\" fx-click=\"cancel\">Close</button>".into()
         };
         format!(
-            "<div hidden><button type=\"button\" fx-key=\"Escape\" fx-click=\"escape\"></button>{keys}</div>\
+            "<div hidden fx-raise=\"{raised}\"><button type=\"button\" fx-key=\"Escape\" fx-click=\"escape\"></button>{keys}</div>\
              <div class=\"fit\" fx-fit><div class=\"editor\">\
              <header class=\"head\"><div class=\"grow\"><h1>{name}</h1><p>{kind}</p></div>{change}{owning}</header>\
              {top}{body}{trouble}\
              <footer>{push}<span class=\"status\" role=\"status\">{status}</span>{footer}</footer></div></div>",
             keys = adv::keys(self),
+            raised = self.raised,
             name = h(&self.obj.name),
             kind = h(&self.obj.kind),
             top = self.topbar(),

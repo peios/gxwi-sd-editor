@@ -19,6 +19,8 @@
 //!   editor → program   { "type": "stop" }          stop pushing, if it is
 //!   program → editor   { "type": "applied", "done"?, "failed"?, "stopped"? }
 //!                   or { "type": "failed", "why" }
+//!   program → editor   { "type": "raise" }        bring the dialog to the
+//!                                                front: asked for again
 //!
 //! `sd` is a self-relative security descriptor's bytes, in base64, whichever
 //! way it goes. What the editor sends is the whole of what it shows, and
@@ -41,13 +43,16 @@
 //! ends when its input closes as well, so it goes when the program does,
 //! however the program ends.
 //!
-//! [`edit`] starts it and speaks for the program. This library has nothing of
-//! GXWI's in it: with `default-features = false` it is the protocol alone.
+//! [`edit`] starts it and speaks for the program, and [`open`] does the same
+//! and keeps an [`Editor`] to raise the dialog with, for a program that
+//! offers the same object's permissions again while they are open. This
+//! library has nothing of GXWI's in it: with `default-features = false` it
+//! is the protocol alone.
 
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::process::{ChildStdin, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
@@ -375,6 +380,10 @@ pub enum ToEditor {
     /// done, and the last, by what it is called where the person knows it.
     /// Needs no answer.
     Progress { done: u64, at: String },
+    /// The person asked for this object's permissions again while the
+    /// dialog is open: bring it to the front. Needs no answer, and an
+    /// editor that does not know it lets it go.
+    Raise,
 }
 
 impl ToEditor {
@@ -428,7 +437,39 @@ pub fn edit_with(
     apply: impl FnMut(&[u8], &[Part]) -> Result<(), String> + Send + 'static,
     done: impl FnOnce() + Send + 'static,
 ) -> io::Result<()> {
-    run(program, request, apply, None, done)
+    run(program, request, apply, None, done).map(drop)
+}
+
+/// The editor a program opened, kept to raise its dialog with.
+#[derive(Clone)]
+pub struct Editor {
+    /// Its input, shared with what speaks for the program; `None` once the
+    /// editor has gone.
+    input: Arc<Mutex<Option<ChildStdin>>>,
+}
+
+impl Editor {
+    /// Asks the editor to bring its dialog to the front, as when the person
+    /// asks for the same object's permissions again. Whether the editor was
+    /// there to be asked.
+    pub fn raise(&self) -> bool {
+        say_to(&self.input, &ToEditor::Raise)
+    }
+}
+
+/// Writes `message` to the editor's input, if it is still there, whole.
+fn say_to(input: &Mutex<Option<ChildStdin>>, message: &ToEditor) -> bool {
+    let mut input = input.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    input.as_mut().is_some_and(|input| input.write_all(line(message).as_bytes()).and_then(|()| input.flush()).is_ok())
+}
+
+/// [`edit`], keeping the [`Editor`] to raise it with.
+pub fn open(
+    request: &Request,
+    apply: impl FnMut(&[u8], &[Part]) -> Result<(), String> + Send + 'static,
+    done: impl FnOnce() + Send + 'static,
+) -> io::Result<Editor> {
+    run(Path::new(PROGRAM), request, apply, None, done)
 }
 
 /// Pushes what was applied into what is inside: given the parts applied, a
@@ -451,6 +492,23 @@ where
     edit_tree_with(Path::new(PROGRAM), request, apply, tree, root, done)
 }
 
+/// [`edit_tree`], keeping the [`Editor`] to raise it with.
+#[cfg(feature = "propagate")]
+pub fn open_tree<T: propagate::Tree + Send + 'static>(
+    request: &Request,
+    apply: impl FnMut(&[u8], &[Part]) -> Result<(), String> + Send + 'static,
+    mut tree: T,
+    root: T::Node,
+    done: impl FnOnce() + Send + 'static,
+) -> io::Result<Editor>
+where
+    T::Node: Send,
+{
+    let generic = request.generic;
+    let walk: Walk = Box::new(move |parts, stop, progress| propagate::walk(&mut tree, &root, parts, generic, stop, progress));
+    run(Path::new(PROGRAM), request, apply, Some(walk), done)
+}
+
 /// [`edit_with`], and when the person asks for what was applied to `root`
 /// to be pushed into what is inside it, walks `tree` from `root`
 /// ([`propagate::walk`]), telling the editor how far it has got and
@@ -470,7 +528,7 @@ where
 {
     let generic = request.generic;
     let walk: Walk = Box::new(move |parts, stop, progress| propagate::walk(&mut tree, &root, parts, generic, stop, progress));
-    run(program, request, apply, Some(walk), done)
+    run(program, request, apply, Some(walk), done).map(drop)
 }
 
 /// How often at most the editor is told how far a walk has got.
@@ -485,7 +543,7 @@ fn run(
     mut apply: impl FnMut(&[u8], &[Part]) -> Result<(), String> + Send + 'static,
     mut walk: Option<Walk>,
     done: impl FnOnce() + Send + 'static,
-) -> io::Result<()> {
+) -> io::Result<Editor> {
     let mut child = Command::new(program).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
     let (Some(mut input), Some(output)) = (child.stdin.take(), child.stdout.take()) else {
         return Err(io::Error::other("the editor was started without its input and output"));
@@ -495,6 +553,10 @@ fn run(
         let _ = child.wait();
         return Err(e);
     }
+    // Shared with the Editor kept for raising it, which writes a line of
+    // its own between the answers.
+    let input = Arc::new(Mutex::new(Some(input)));
+    let editor = Editor { input: Arc::clone(&input) };
     let stop = Arc::new(AtomicBool::new(false));
     let (tell, asked) = std::sync::mpsc::channel::<(Vec<u8>, Vec<Part>, bool)>();
     let heard = Arc::clone(&stop);
@@ -517,7 +579,7 @@ fn run(
         heard.store(true, Ordering::Relaxed);
     });
     std::thread::spawn(move || {
-        let mut say = |message: &ToEditor| input.write_all(line(message).as_bytes()).and_then(|()| input.flush()).is_ok();
+        let say = |message: &ToEditor| say_to(&input, message);
         for (sd, parts, propagate) in asked {
             let answer = match apply(&sd, &parts) {
                 Err(why) => ToEditor::Failed { why },
@@ -543,11 +605,12 @@ fn run(
                 break;
             }
         }
-        drop(input);
+        // Closed, so a raise asked for after this says the editor is gone.
+        drop(input.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take());
         let _ = child.wait();
         done();
     });
-    Ok(())
+    Ok(editor)
 }
 
 /// Bytes as base64 text, which is how a descriptor crosses in JSON.
@@ -588,6 +651,12 @@ mod base64_option {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Taken by each test that writes an editor script and runs it. A
+    /// script being written is open for writing, and a child another test
+    /// starts meanwhile inherits that, so running the script fails with
+    /// ETXTBSY. One at a time, nothing is open to inherit.
+    static SCRIPTS: Mutex<()> = Mutex::new(());
 
     #[cfg(feature = "splice")]
     #[test]
@@ -695,6 +764,7 @@ mod tests {
 
     #[test]
     fn edit_speaks_for_the_program_until_the_editor_goes() {
+        let _one = SCRIPTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // An editor that applies twice, says what it was answered, and goes.
         let dir = std::env::temp_dir().join(format!("gxwi-sd-editor-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -734,11 +804,32 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// The Editor kept raises the dialog while it is there, and says when
+    /// it has gone.
+    #[test]
+    fn a_raise_reaches_the_editor_while_it_is_there() {
+        let _one = SCRIPTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = std::env::temp_dir().join(format!("gxwi-sd-editor-raise-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let editor = dir.join("editor.sh");
+        let heard = dir.join("heard");
+        std::fs::write(&editor, format!("#!/bin/sh\nread request\nread raise\necho \"$raise\" > {heard}\n", heard = heard.display())).unwrap();
+        std::fs::set_permissions(&editor, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let (tell, gone) = std::sync::mpsc::channel();
+        let opened = run(&editor, &request(), |_, _| Ok(()), None, move || tell.send(()).unwrap()).unwrap();
+        assert!(opened.raise());
+        gone.recv_timeout(std::time::Duration::from_secs(10)).expect("done when the editor has gone");
+        assert_eq!(std::fs::read_to_string(&heard).unwrap(), "{\"type\":\"raise\"}\n");
+        assert!(!opened.raise(), "nobody is there to raise");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// An editor that asks for what it applies to be pushed inside, and
     /// says stop while the walk goes on: the walk hears it, and the answer
     /// says how far it got.
     #[test]
     fn a_stop_is_heard_while_the_walk_goes_on() {
+        let _one = SCRIPTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join(format!("gxwi-sd-editor-stop-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let editor = dir.join("editor.sh");
