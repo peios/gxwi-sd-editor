@@ -38,12 +38,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # libgxwi as of the gxwi release dev.peios.gxwi-sdk stages, which a package
 # build takes it from (gxwi's dev/pins.toml).
-libgxwi = { git = "https://github.com/peios/gxwi.git", rev = "25d43045f02fab59e4606eec616cdb1a285ebd91", optional = true }
-peios = { git = "https://github.com/peios/peios-rs.git", rev = "02c87cb643c30eef6b74cd1d9d8b0ae067bed69a", package = "peios", optional = true }
+libgxwi = { git = "https://github.com/peios/gxwi.git", rev = "5629140add3de075511b3379fd690fdabd06dcaf", optional = true }
+peios = { git = "https://github.com/peios/peios-rs.git", rev = "f8c84930f2b71763bcf0550df0b1420a0f63b21e", package = "peios", optional = true }
 # Who a SID is, asked of authd's identity socket through the client every
 # program asking it shares.
-libauthd = { git = "https://github.com/peios/authd.git", rev = "6dcbf2b1f8d9eb5f1b57c438cd97069dcb92fa94", package = "libauthd", optional = true }
-libauthd-client = { git = "https://github.com/peios/authd.git", rev = "6dcbf2b1f8d9eb5f1b57c438cd97069dcb92fa94", package = "libauthd-client", optional = true }
+libauthd = { git = "https://github.com/peios/authd.git", rev = "90471e3d4db127528862fb325b04edb3d4f0fc30", package = "libauthd", optional = true }
+libauthd-client = { git = "https://github.com/peios/authd.git", rev = "90471e3d4db127528862fb325b04edb3d4f0fc30", package = "libauthd-client", optional = true }
 libc = { version = "0.2", optional = true }
 # UUID v5, for a part the person names (PSPU §8.2, `object.naming`).
 sha1 = { version = "0.10", optional = true }

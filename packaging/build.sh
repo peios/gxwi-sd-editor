@@ -5,7 +5,7 @@ export CARGO_HOME="$PEKIT_OUT/cargo-home"
 mkdir -p "$CARGO_HOME"
 cp "$PEKIT_VENDOR_OUT/cargo-config.toml" "$CARGO_HOME/config.toml"
 unset PEIOS_LIB_DIR PEIOS_INCLUDE PKM_UAPI
-pkg-config --atleast-version=0.5.7 peios
+pkg-config --atleast-version=0.5.8 peios
 export BINDGEN_EXTRA_CLANG_ARGS="-isystem $(gcc -print-file-name=include) ${BINDGEN_EXTRA_CLANG_ARGS:-}"
 export RUSTC_BOOTSTRAP=1
 export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-Zcf-protection=full --remap-path-prefix=$PEKIT_WORKSPACE_ROOT=/usr/src/debug/dev.peios.$COMPONENT/.workspace --remap-path-prefix=$PEKIT_OUT_BASE=/usr/src/debug/dev.peios.$COMPONENT/.build --remap-path-prefix=$SRC=/usr/src/debug/dev.peios.$COMPONENT --remap-path-prefix=$PEKIT_VENDOR_OUT/vendor=/usr/src/debug/dev.peios.$COMPONENT/vendor"
