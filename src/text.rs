@@ -114,7 +114,7 @@ pub fn sd_text(sd: &Descriptor) -> String {
             s.push_str(&format!("D:{}", flags(PD, DR, DI)));
             entries(&mut s, dacl);
         }
-        None => s.push_str("D:NO_ACCESS_CONTROL"),
+        None => s.push_str(&format!("D:{}NO_ACCESS_CONTROL", flags(PD, DR, DI))),
     }
     if let Some(sacl) = &sd.sacl {
         s.push_str(&format!("\nS:{}", flags(PS, SR_REQ, SI)));
@@ -194,9 +194,6 @@ pub fn from_text(text: &str, now: &Descriptor, ids: &mut Ids) -> Result<Descript
     if !sections.contains(&'D') {
         return Err("Say the access list with D:, or write D:NO_ACCESS_CONTROL for none at all.".into());
     }
-    // libpeios has no word for no access list at all: the section goes,
-    // and so does the list.
-    let none = flat.to_ascii_uppercase().find("D:NO_ACCESS_CONTROL").map(|at| flat.replace_range(at..at + "D:NO_ACCESS_CONTROL".len(), "")).is_some();
     if depth != 0 || quote {
         return Err(if quote { "A quotation isn't closed with \".".into() } else { "A bracket isn't closed.".into() });
     }
@@ -210,9 +207,6 @@ pub fn from_text(text: &str, now: &Descriptor, ids: &mut Ids) -> Result<Descript
         }
     })?;
     let mut new = Descriptor::parse(bytes.as_bytes(), ids, &mut Found::default())?;
-    if none {
-        new.dacl = None;
-    }
     new.control = (now.control & !SAID) | (new.control & SAID);
     // The entries kept as found, back where their comments are: after the
     // entries before them, and the kept ones put back before them.
@@ -401,6 +395,17 @@ mod tests {
         assert!(edited("O:SYG:SYD:(A;;FA;;;SY)", |t| t.replace("D:", "")).unwrap_err().contains("D:NO_ACCESS_CONTROL"));
         assert!(edited("O:SYG:SYD:(A;;FA;;;SY)", |t| t.replace(";SY)", ";SY")).unwrap_err().contains("bracket"));
         assert!(edited("O:SYG:SYD:(A;;FA;;;SY)", |t| format!("{t} /* not closed")).unwrap_err().contains("*/"));
+    }
+
+    #[test]
+    fn null_and_empty_access_lists_round_trip_with_flags() {
+        for sddl in ["O:SYG:SYD:NO_ACCESS_CONTROL", "O:SYG:SYD:PAINO_ACCESS_CONTROL", "O:SYG:SYD:"] {
+            let (sd, new, _) = edited(sddl, |text| text).unwrap();
+            assert_eq!(new.dacl.is_none(), sd.dacl.is_none());
+            assert_eq!(new.control & SAID, sd.control & SAID);
+            assert_eq!(sd_text(&new), sd_text(&sd));
+        }
+        assert!(edited("O:SYG:SYD:(A;;FA;;;SY)", |text| text.replace("D:", "D:NO_ACCESS_CONTROL")).is_err());
     }
 
     #[test]
